@@ -95,7 +95,7 @@ if os.path.isfile(P4_CKPT) and os.path.isfile(P4_STATS):
         feat_std    = stats['feat_std'].astype(np.float32)
         target_cols = list(stats['target_cols'])
 
-        ckpt = torch.load(P4_CKPT, map_location=device)
+        ckpt = torch.load(P4_CKPT, map_location=device, weights_only=False)
         target_cols = ckpt.get('target_cols', target_cols)
         mlp = NutritionMLP(in_feats=9, num_targets=len(target_cols)).to(device)
         mlp.load_state_dict(ckpt['model_state_dict'])
@@ -114,7 +114,7 @@ if os.path.isfile(P4_CKPT) and os.path.isfile(P4_STATS):
 # ── Try Phase 3 fallback ─────────────────────────────────────────────────────
 if pipeline_mode is None:
     if os.path.isfile(P3_CKPT):
-        ckpt = torch.load(P3_CKPT, map_location=device)
+        ckpt = torch.load(P3_CKPT, map_location=device, weights_only=False)
         target_cols = ckpt.get('target_cols', target_cols)
         p3_model = NutritionEstimator(num_targets=len(target_cols)).to(device)
         p3_model.load_state_dict(ckpt['model_state_dict'])
