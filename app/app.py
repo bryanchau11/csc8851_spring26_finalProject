@@ -1,110 +1,277 @@
 """
-Nutrition5K — Gradio Demo App
-Upload a food dish image → get predicted Calories, Fat, Protein, Carbohydrates.
+Nutrition5K — Gradio Demo App  (Phase 4 pipeline)
+
+Two inference modes (auto-selected based on available checkpoints):
+  Phase 4 (preferred): YOLOv8-seg → MiDaS depth → MLP regression + MC uncertainty
+  Phase 3 (fallback) : ResNet-50 direct image → nutrition regression
 
 Usage:
-    pip install gradio torch torchvision pillow
+    pip install gradio torch torchvision ultralytics timm pillow opencv-python
     python app/app.py
 
-Requires:
-    models/best_model.pt   (download from Kaggle output after training)
+Required files in models/:
+    best_mlp.pt          ← Phase 4 MLP  (from Kaggle output of 04_yolo_depth_pipeline)
+    mlp_feat_stats.npz   ← feature normalisation stats
+    best_model.pt        ← Phase 3 ResNet fallback
 """
 
-import os
+import os, warnings
+import numpy as np
+import cv2
 import torch
 import torch.nn as nn
-import torchvision.models as models
+import torchvision.models as tv_models
 import torchvision.transforms as T
 from PIL import Image
 import gradio as gr
+warnings.filterwarnings('ignore')
 
-# ── Config ────────────────────────────────────────────────────────────────────
-CKPT_PATH   = os.path.join(os.path.dirname(__file__), '..', 'models', 'best_model.pt')
-BACKBONE    = 'resnet50'   # must match what was used during training
-IMG_SIZE    = 224
-TARGET_COLS = ['calories', 'fat', 'protein', 'carbs']  # overridden from checkpoint
+MODELS_DIR = os.path.join(os.path.dirname(__file__), '..', 'models')
+P4_CKPT    = os.path.join(MODELS_DIR, 'best_mlp.pt')
+P4_STATS   = os.path.join(MODELS_DIR, 'mlp_feat_stats.npz')
+P3_CKPT    = os.path.join(MODELS_DIR, 'best_model.pt')
+IMG_SIZE   = 224
+MC_SAMPLES = 30
 
-# ── Device ────────────────────────────────────────────────────────────────────
 device = torch.device('cuda' if torch.cuda.is_available() else
                       'mps'  if torch.backends.mps.is_available() else
                       'cpu')
 
-# ── Model definition (must match 03_model.ipynb exactly) ─────────────────────
-class NutritionEstimator(nn.Module):
-    def __init__(self, num_targets: int, backbone: str = 'resnet50'):
-        super().__init__()
-        if backbone == 'resnet50':
-            base = models.resnet50(weights=None)
-            in_feats = base.fc.in_features          # 2048
-            base.fc  = nn.Identity()
-        elif backbone == 'efficientnet_b2':
-            base = models.efficientnet_b2(weights=None)
-            in_feats = base.classifier[1].in_features  # 1408
-            base.classifier = nn.Identity()
-        else:
-            raise ValueError(f'Unknown backbone: {backbone}')
+# ── COCO food-relevant class IDs for YOLO ─────────────────────────────────────
+FOOD_CLASSES = {
+    40, 41, 42, 43, 44, 45,          # glass/cup/fork/knife/spoon/bowl
+    46, 47, 48, 49, 50, 51,          # banana/apple/sandwich/orange/broccoli/carrot
+    52, 53, 54, 55, 60,              # hot dog/pizza/donut/cake/dining table
+}
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Model definitions
+# ─────────────────────────────────────────────────────────────────────────────
+
+class NutritionMLP(nn.Module):
+    def __init__(self, in_feats: int, num_targets: int, dropout: float = 0.2):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(in_feats, 128), nn.BatchNorm1d(128), nn.ReLU(), nn.Dropout(dropout),
+            nn.Linear(128, 64),       nn.BatchNorm1d(64),  nn.ReLU(), nn.Dropout(dropout),
+            nn.Linear(64,  32),       nn.BatchNorm1d(32),  nn.ReLU(), nn.Dropout(dropout),
+            nn.Linear(32, num_targets),
+        )
+    def forward(self, x): return self.net(x)
+
+
+class NutritionEstimator(nn.Module):
+    """Phase 3 ResNet-50 model (fallback)."""
+    def __init__(self, num_targets: int):
+        super().__init__()
+        base = tv_models.resnet50(weights=None)
+        in_f = base.fc.in_features
+        base.fc = nn.Identity()
         self.backbone = base
         self.head = nn.Sequential(
-            nn.Linear(in_feats, 512),
-            nn.BatchNorm1d(512),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.3),
+            nn.Linear(in_f, 512), nn.BatchNorm1d(512), nn.ReLU(), nn.Dropout(0.3),
             nn.Linear(512, num_targets),
         )
+    def forward(self, x): return self.head(self.backbone(x))
 
-    def forward(self, x):
-        return self.head(self.backbone(x))
 
-# ── Load checkpoint ───────────────────────────────────────────────────────────
-def load_model():
-    if not os.path.isfile(CKPT_PATH):
-        raise FileNotFoundError(
-            f'Checkpoint not found at {CKPT_PATH}\n'
-            'Download best_model.pt from Kaggle output and place it in models/'
-        )
-    ckpt = torch.load(CKPT_PATH, map_location=device)
-    cols = ckpt.get('target_cols', TARGET_COLS)
-    mdl  = NutritionEstimator(num_targets=len(cols), backbone=BACKBONE).to(device)
-    mdl.load_state_dict(ckpt['model_state_dict'])
-    mdl.eval()
-    print(f'✓ Loaded checkpoint (epoch {ckpt.get("epoch", "?")})')
-    return mdl, cols
+# ─────────────────────────────────────────────────────────────────────────────
+# Load models at startup
+# ─────────────────────────────────────────────────────────────────────────────
 
-model, target_cols = load_model()
+pipeline_mode = None   # 'phase4' or 'phase3'
+mlp = yolo_model = midas_model = midas_transform = None
+feat_mean = feat_std = None
+target_cols = ['calories', 'fat', 'protein', 'carbs']
 
-# ── Inference transform (same as val_transform in training) ───────────────────
-transform = T.Compose([
-    T.Resize((IMG_SIZE, IMG_SIZE)),
-    T.ToTensor(),
-    T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+# ── Try Phase 4 ───────────────────────────────────────────────────────────────
+if os.path.isfile(P4_CKPT) and os.path.isfile(P4_STATS):
+    try:
+        from ultralytics import YOLO as _YOLO
+        yolo_model = _YOLO('yolov8n-seg.pt')
+
+        stats = np.load(P4_STATS, allow_pickle=True)
+        feat_mean   = stats['feat_mean'].astype(np.float32)
+        feat_std    = stats['feat_std'].astype(np.float32)
+        target_cols = list(stats['target_cols'])
+
+        ckpt = torch.load(P4_CKPT, map_location=device)
+        target_cols = ckpt.get('target_cols', target_cols)
+        mlp = NutritionMLP(in_feats=9, num_targets=len(target_cols)).to(device)
+        mlp.load_state_dict(ckpt['model_state_dict'])
+
+        # Lazy MiDaS
+        midas_model = torch.hub.load('intel-isl/MiDaS', 'MiDaS_small', trust_repo=True)
+        midas_model.to(device).eval()
+        _t = torch.hub.load('intel-isl/MiDaS', 'transforms', trust_repo=True)
+        midas_transform = _t.small_transform
+
+        pipeline_mode = 'phase4'
+        print(f'✓ Phase 4 pipeline loaded  (targets: {target_cols})')
+    except Exception as e:
+        print(f'⚠ Phase 4 load failed ({e}) — trying Phase 3 fallback')
+
+# ── Try Phase 3 fallback ─────────────────────────────────────────────────────
+if pipeline_mode is None:
+    if os.path.isfile(P3_CKPT):
+        ckpt = torch.load(P3_CKPT, map_location=device)
+        target_cols = ckpt.get('target_cols', target_cols)
+        p3_model = NutritionEstimator(num_targets=len(target_cols)).to(device)
+        p3_model.load_state_dict(ckpt['model_state_dict'])
+        p3_model.eval()
+        pipeline_mode = 'phase3'
+        print(f'✓ Phase 3 ResNet model loaded  (targets: {target_cols})')
+    else:
+        print('⚠ No checkpoint found. Place best_mlp.pt + mlp_feat_stats.npz '
+              '(or best_model.pt) in models/')
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Feature extraction helpers (Phase 4)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get_food_mask(pil_img: Image.Image) -> np.ndarray:
+    img_bgr = cv2.cvtColor(np.array(pil_img.convert('RGB')), cv2.COLOR_RGB2BGR)
+    H, W    = img_bgr.shape[:2]
+
+    # Circular centre fallback
+    fallback = np.zeros((H, W), dtype=np.float32)
+    cv2.circle(fallback, (W // 2, H // 2), int(min(H, W) * 0.3), 1.0, -1)
+
+    if yolo_model is None:
+        return cv2.resize(fallback, (IMG_SIZE, IMG_SIZE))
+
+    results  = yolo_model(img_bgr, verbose=False)[0]
+    if results.masks is None or len(results.masks) == 0:
+        return cv2.resize(fallback, (IMG_SIZE, IMG_SIZE))
+
+    classes  = results.boxes.cls.cpu().numpy().astype(int)
+    food_idx = [i for i, c in enumerate(classes) if c in FOOD_CLASSES] or list(range(len(classes)))
+
+    combined = np.zeros((H, W), dtype=np.float32)
+    for i in food_idx:
+        m = cv2.resize(results.masks[i].data[0].cpu().numpy(), (W, H))
+        combined = np.maximum(combined, m)
+
+    combined = (combined > 0.5).astype(np.float32)
+    if combined.sum() < 100:
+        combined = fallback
+    return cv2.resize(combined, (IMG_SIZE, IMG_SIZE))
+
+
+def _get_depth_map(pil_img: Image.Image) -> np.ndarray:
+    if midas_model is None:
+        return np.full((IMG_SIZE, IMG_SIZE), 0.5, dtype=np.float32)
+    try:
+        img_rgb = np.array(pil_img.convert('RGB'))
+        inp     = midas_transform(img_rgb).to(device)
+        with torch.no_grad():
+            pred = midas_model(inp).squeeze().cpu().numpy()
+        pred = (pred - pred.min()) / (pred.max() - pred.min() + 1e-8)
+        return cv2.resize(pred, (IMG_SIZE, IMG_SIZE)).astype(np.float32)
+    except Exception:
+        return np.full((IMG_SIZE, IMG_SIZE), 0.5, dtype=np.float32)
+
+
+def _extract_features(pil_img: Image.Image) -> np.ndarray:
+    mask  = _get_food_mask(pil_img)
+    depth = _get_depth_map(pil_img)
+
+    mask_area = mask.mean()
+    d_mean, d_std = depth.mean(), depth.std()
+    d_med,  d_max = float(np.median(depth)), depth.max()
+
+    masked = depth[mask > 0.5]
+    if len(masked) == 0:
+        masked = depth.flatten()
+    md_mean, md_std = masked.mean(), masked.std()
+    md_med,  md_max = float(np.median(masked)), masked.max()
+
+    feat = np.array([mask_area,
+                     d_mean, d_std, d_med, d_max,
+                     md_mean, md_std, md_med, md_max], dtype=np.float32)
+    return (feat - feat_mean) / feat_std
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Inference
+# ─────────────────────────────────────────────────────────────────────────────
+
+val_transform = T.Compose([
+    T.Resize((IMG_SIZE, IMG_SIZE)), T.ToTensor(),
+    T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
 ])
 
-# ── Prediction function ───────────────────────────────────────────────────────
+
 def predict(image: Image.Image):
     if image is None:
-        return {col: 'No image provided' for col in target_cols}
-    img_tensor = transform(image.convert('RGB')).unsqueeze(0).to(device)
-    with torch.no_grad():
-        preds = model(img_tensor).squeeze(0).cpu().numpy()
-    return {col: f'{val:.1f}' for col, val in zip(target_cols, preds)}
+        return 'Please upload an image.', None
 
-# ── Gradio UI ─────────────────────────────────────────────────────────────────
+    if pipeline_mode is None:
+        return ('No model checkpoint found. Download best_mlp.pt + mlp_feat_stats.npz '
+                'from Kaggle output and place them in models/.'), None
+
+    if pipeline_mode == 'phase4':
+        feat = _extract_features(image)
+        x    = torch.tensor(feat).unsqueeze(0).to(device)
+
+        # MC Dropout uncertainty
+        mlp.train()
+        preds_mc = []
+        with torch.no_grad():
+            for _ in range(MC_SAMPLES):
+                preds_mc.append(mlp(x).squeeze(0).cpu().numpy())
+        preds_mc = np.stack(preds_mc)
+        mean_pred = preds_mc.mean(0)
+        std_pred  = preds_mc.std(0)
+
+        rows = []
+        for col, mu, sigma in zip(target_cols, mean_pred, std_pred):
+            rows.append(f'**{col}**: {mu:.1f} ± {sigma*2:.1f}  _(95% CI)_')
+        result_md = '\n\n'.join(rows)
+        result_json = {col: f'{mu:.1f} ± {sig*2:.1f}' for col, mu, sig in zip(target_cols, mean_pred, std_pred)}
+        mode_note = '_Pipeline: YOLOv8-seg → MiDaS depth → MLP + MC Dropout_'
+
+    else:  # phase3
+        img_t = val_transform(image.convert('RGB')).unsqueeze(0).to(device)
+        with torch.no_grad():
+            mean_pred = p3_model(img_t).squeeze(0).cpu().numpy()
+        result_json = {col: f'{v:.1f}' for col, v in zip(target_cols, mean_pred)}
+        mode_note  = '_Pipeline: ResNet-50 direct regression (Phase 3 baseline)_'
+
+    label_txt = '\n'.join([f'{col}: {result_json[col]}' for col in target_cols])
+    label_txt += f'\n\n{mode_note}\n> Units: kcal for calories, grams for macros'
+    return label_txt, result_json
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Gradio UI
+# ─────────────────────────────────────────────────────────────────────────────
+
+mode_label = {
+    'phase4': '🔬 Phase 4 — YOLO + Depth + MLP (with uncertainty)',
+    'phase3': '📊 Phase 3 — ResNet-50 baseline',
+    None:     '⚠ No model loaded',
+}
+
 with gr.Blocks(title='Nutrition5K Estimator') as demo:
     gr.Markdown(
-        '# 🥗 Nutrition5K — Dish Nutrition Estimator\n'
-        'Upload a photo of a food dish to predict its **calories, fat, protein, and carbohydrates**.'
+        f'# 🥗 Nutrition5K — Dish Nutrition Estimator\n'
+        f'Upload a photo of a food dish to predict **calories, fat, protein, and carbohydrates**.\n\n'
+        f'**Active pipeline**: {mode_label.get(pipeline_mode, "unknown")}'
     )
     with gr.Row():
-        img_input  = gr.Image(type='pil', label='Upload Dish Image')
-        output_box = gr.JSON(label='Predicted Nutrition (raw units from training data)')
+        img_input   = gr.Image(type='pil', label='Upload Dish Image')
+        with gr.Column():
+            text_out = gr.Markdown(label='Prediction')
+            json_out = gr.JSON(label='Raw values')
 
     predict_btn = gr.Button('Predict', variant='primary')
-    predict_btn.click(fn=predict, inputs=img_input, outputs=output_box)
+    predict_btn.click(fn=predict, inputs=img_input, outputs=[text_out, json_out])
 
     gr.Markdown(
-        '> **Note**: Predictions are in the same units as the Nutrition5K dataset '
-        '(calories in kcal, macros in grams).'
+        '> **Note**: Best results with overhead-style plated dish photos '
+        '(matching the Nutrition5K training distribution).'
     )
 
 if __name__ == '__main__':
