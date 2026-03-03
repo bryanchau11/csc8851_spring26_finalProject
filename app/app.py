@@ -692,30 +692,32 @@ def predict(image: Image.Image):
 
             DATASET_MEAN_WEIGHT = 280.0
             MIN_WEIGHT          = 50.0
-            _used_fallback = w_raw < MIN_WEIGHT or (w_std_mc > abs(w_raw) and w_raw < DATASET_MEAN_WEIGHT)
 
             # ── Nutrition DB lookup (detect → portion → database) ──────────────
-            # When Phase 5 identifies the food (conf ≥ 40%), use per-food macros
-            # from FOOD_NUTRITION_DB (sourced from USDA FoodData Central).
-            # This implements the full pipeline:
-            #   Phase 5 label → FOOD_NUTRITION_DB → per-gram macros for all 4 targets
-            # The portion (grams) comes from WeightMLP when confident, or from
-            # the food-specific typical serving size in the DB as fallback.
+            # Do this BEFORE the fallback decision so we can use the USDA serving
+            # size as a plausibility check on the WeightMLP prediction.
             _db_entry     = None
             _food_scale_note = ''
             if detected_food and food_conf and food_conf >= 0.15:
-                # ── USDA API lookup: food name → per-gram macros ──────────────
-                # Threshold lowered to 15% (was 40%) since USDA handles ambiguity
-                # itself — even a low-confidence "omelette" gets correct macros.
                 _query    = _food_name_to_key(detected_food)
                 _db_entry = _lookup_usda(_query)
 
-            # Decide portion weight: WeightMLP if confident, else DB serving size,
-            # else Nutrition5K dataset mean (280g)
+            # Fallback criteria (use USDA/restaurant serving size instead of MLP):
+            #  1. WeightMLP below hard floor (50g)
+            #  2. Very uncertain prediction relative to its own magnitude
+            #  3. Prediction is less than 40% of the USDA typical serving size —
+            #     this catches cases where MiDaS depth cues mislead the MLP
+            #     (e.g. a bowl seen from above looks shallow → low predicted weight)
+            #     40% threshold is purely geometric: anything less than ~2/5 of the
+            #     expected restaurant portion is almost certainly a depth artefact.
+            _usda_serving = float(_db_entry[4]) if _db_entry is not None else DATASET_MEAN_WEIGHT
+            _cv_fallback  = (w_std_mc > abs(w_raw) and w_raw < DATASET_MEAN_WEIGHT)
+            _size_fallback = (w_raw < 0.40 * _usda_serving)
+            _used_fallback = w_raw < MIN_WEIGHT or _cv_fallback or _size_fallback
+
+            # Decide portion weight
             if _used_fallback:
                 if _db_entry is not None:
-                    # Use restaurant-portion size (already encoded in _db_entry[4]
-                    # via _restaurant_serving_g); always >= 150g for main dishes
                     w_mean = float(_db_entry[4])
                 else:
                     w_mean = _restaurant_serving_g(detected_food or '')
