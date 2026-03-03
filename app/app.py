@@ -367,6 +367,8 @@ class FoodClassifier(nn.Module):
 pipeline_mode = None   # 'full', 'phase6', 'phase4', or 'phase3'
                        # 'full' = Phase 6 + Phase 4 + Phase 5 all running together
 mlp = weight_mlp_model = yolo_model = midas_model = midas_transform = None
+_weight_log_target = False   # True when checkpoint was trained on log(w+1)
+_weight_log_offset = 1.0    # additive offset used in log transform
 p3_model = None
 # Phase 6 feature normalisation stats
 feat_mean = feat_std = None
@@ -410,6 +412,8 @@ if _geo_models_loaded and os.path.isfile(P6_CKPT) and os.path.isfile(P6_CONST) a
         weight_mlp_model = WeightMLP(in_feats=9).to(device)
         weight_mlp_model.load_state_dict(ckpt['model_state_dict'])
         weight_mlp_model.eval()
+        _weight_log_target = ckpt.get('use_log_target', False)
+        _weight_log_offset = float(ckpt.get('log_offset', 1.0))
         _p6_loaded = True
         print(f'✓ Phase 6 loaded  (weight-first, targets: {target_cols})')
         print(f'  Constants: { {k: round(v,4) for k,v in nutrition_constants.items()} }')
@@ -738,7 +742,10 @@ def predict(image: Image.Image):
             _w_samples = []
             with torch.no_grad():
                 for _ in range(MC_SAMPLES):
-                    _w_samples.append(weight_mlp_model(x6).item())
+                    _raw_s = weight_mlp_model(x6).item()
+                    if _weight_log_target:
+                        _raw_s = float(np.exp(_raw_s) - _weight_log_offset)
+                    _w_samples.append(max(_raw_s, 10.0))   # clamp to 10g
             weight_mlp_model.eval()
             w_raw = float(np.mean(_w_samples));  w_std_mc = float(np.std(_w_samples))
 
