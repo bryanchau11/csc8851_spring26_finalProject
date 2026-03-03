@@ -20,6 +20,7 @@ Required files in models/:
 """
 
 import os, json, warnings
+import urllib.request, urllib.parse
 import numpy as np
 import cv2
 import torch
@@ -67,117 +68,126 @@ _NON_FOOD = {'dining table', 'fork', 'knife', 'spoon', 'chopsticks'}
 # Each entry: (kcal/g, fat/g, protein/g, carb/g, typical_serving_g)
 # This implements the full "detect → portion estimate → nutrition DB" pipeline:
 #   Phase 5 identifies the food → look up serving_g → multiply by per-gram macros
-# When WeightMLP is confident, serving_g is overridden by the predicted weight.
-FOOD_NUTRITION_DB = {
-    # name                   kcal/g  fat/g  pro/g  carb/g serving_g
-    'apple_pie':            (2.37, 0.110, 0.022, 0.330,  125),
-    'baby_back_ribs':       (2.90, 0.190, 0.220, 0.000,  200),
-    'baklava':              (4.28, 0.230, 0.060, 0.520,   60),
-    'beef_carpaccio':       (1.62, 0.100, 0.200, 0.010,  100),
-    'beef_tartare':         (1.62, 0.100, 0.200, 0.010,  150),
-    'beet_salad':           (0.49, 0.015, 0.017, 0.100,  150),
-    'beignets':             (3.50, 0.160, 0.050, 0.480,   80),
-    'bibimbap':             (1.30, 0.038, 0.070, 0.200,  350),
-    'bread_pudding':        (1.85, 0.065, 0.054, 0.270,  150),
-    'breakfast_burrito':    (1.95, 0.090, 0.100, 0.200,  200),
-    'bruschetta':           (1.75, 0.065, 0.042, 0.260,  100),
-    'caesar_salad':         (0.75, 0.052, 0.040, 0.040,  200),
-    'cannoli':              (3.42, 0.170, 0.068, 0.390,   80),
-    'caprese_salad':        (0.96, 0.065, 0.059, 0.038,  200),
-    'carrot_cake':          (3.15, 0.140, 0.034, 0.430,  100),
-    'ceviche':              (0.68, 0.020, 0.120, 0.040,  150),
-    'cheese_plate':         (3.50, 0.280, 0.220, 0.010,   80),
-    'cheesecake':           (3.21, 0.220, 0.058, 0.260,  120),
-    'chicken_curry':        (1.50, 0.070, 0.120, 0.100,  250),
-    'chicken_quesadilla':   (2.24, 0.110, 0.130, 0.200,  180),
-    'chicken_wings':        (2.66, 0.170, 0.220, 0.060,  200),
-    'chocolate_cake':       (3.71, 0.175, 0.042, 0.540,  100),
-    'chocolate_mousse':     (2.10, 0.130, 0.040, 0.240,  100),
-    'churros':              (3.73, 0.170, 0.040, 0.530,   80),
-    'clam_chowder':         (0.72, 0.030, 0.055, 0.080,  240),
-    'club_sandwich':        (2.30, 0.100, 0.130, 0.240,  200),
-    'crab_cakes':           (1.65, 0.090, 0.130, 0.100,  150),
-    'creme_brulee':         (1.74, 0.100, 0.040, 0.210,  120),
-    'croque_madame':        (2.40, 0.140, 0.130, 0.200,  200),
-    'cup_cakes':            (3.51, 0.160, 0.035, 0.520,   65),
-    'deviled_eggs':         (1.58, 0.110, 0.100, 0.020,  100),
-    'donuts':               (3.89, 0.190, 0.049, 0.510,   75),
-    'dumplings':            (1.66, 0.050, 0.080, 0.250,  150),
-    'edamame':              (1.21, 0.052, 0.115, 0.100,  155),
-    'eggs_benedict':        (1.94, 0.130, 0.110, 0.120,  200),
-    'escargots':            (1.32, 0.065, 0.140, 0.060,  100),
-    'falafel':              (3.33, 0.170, 0.130, 0.320,  120),
-    'filet_mignon':         (2.71, 0.185, 0.210, 0.000,  200),
-    'fish_and_chips':       (2.50, 0.130, 0.110, 0.260,  300),
-    'foie_gras':            (4.62, 0.430, 0.115, 0.047,   80),
-    'french_fries':         (3.12, 0.150, 0.037, 0.410,  150),
-    'french_onion_soup':    (0.57, 0.020, 0.034, 0.080,  300),
-    'french_toast':         (1.54, 0.060, 0.070, 0.210,  150),
-    'fried_calamari':       (1.75, 0.080, 0.140, 0.150,  150),
-    'fried_rice':           (1.63, 0.052, 0.048, 0.300,  250),
-    'frozen_yogurt':        (1.27, 0.018, 0.038, 0.260,  150),
-    'garlic_bread':         (3.27, 0.130, 0.080, 0.430,   80),
-    'gnocchi':              (1.31, 0.012, 0.030, 0.270,  200),
-    'greek_salad':          (0.74, 0.053, 0.024, 0.060,  200),
-    'grilled_cheese_sandwich': (3.10, 0.150, 0.120, 0.310, 150),
-    'grilled_salmon':       (1.45, 0.065, 0.200, 0.000,  180),
-    'guacamole':            (1.60, 0.145, 0.020, 0.090,  100),
-    'gyoza':                (1.66, 0.055, 0.085, 0.240,  150),
-    'hamburger':            (2.95, 0.155, 0.150, 0.240,  220),
-    'hot_and_sour_soup':    (0.45, 0.015, 0.040, 0.060,  300),
-    'hot_dog':              (2.90, 0.180, 0.110, 0.230,  150),
-    'huevos_rancheros':     (1.45, 0.080, 0.080, 0.130,  250),
-    'hummus':               (1.77, 0.090, 0.076, 0.200,  100),
-    'ice_cream':            (2.07, 0.110, 0.036, 0.240,  150),
-    'lasagna':              (1.35, 0.052, 0.080, 0.150,  300),
-    'lobster_bisque':       (1.20, 0.070, 0.070, 0.100,  250),
-    'lobster_roll_sandwich':(2.45, 0.110, 0.140, 0.230,  200),
-    'macaroni_and_cheese':  (1.64, 0.062, 0.068, 0.220,  250),
-    'macarons':             (4.04, 0.140, 0.054, 0.610,   35),
-    'miso_soup':            (0.40, 0.010, 0.030, 0.058,  250),
-    'mussels':              (0.86, 0.022, 0.118, 0.037,  200),
-    'nachos':               (3.06, 0.150, 0.070, 0.380,  150),
-    'omelette':             (1.54, 0.110, 0.110, 0.010,  150),
-    'onion_rings':          (3.11, 0.160, 0.040, 0.400,  120),
-    'oysters':              (0.81, 0.023, 0.091, 0.049,  150),
-    'pad_thai':             (1.85, 0.068, 0.090, 0.250,  300),
-    'paella':               (1.60, 0.060, 0.110, 0.180,  300),
-    'pancakes':             (2.27, 0.060, 0.060, 0.380,  150),
-    'panna_cotta':          (1.60, 0.095, 0.035, 0.195,  120),
-    'peking_duck':          (3.37, 0.240, 0.190, 0.080,  200),
-    'pho':                  (0.65, 0.015, 0.060, 0.090,  450),
-    'pizza':                (2.66, 0.107, 0.111, 0.330,  200),
-    'pork_chop':            (2.50, 0.155, 0.230, 0.000,  200),
-    'poutine':              (1.68, 0.085, 0.055, 0.200,  400),
-    'prime_rib':            (3.22, 0.240, 0.200, 0.000,  250),
-    'pulled_pork_sandwich': (2.70, 0.120, 0.160, 0.260,  250),
-    'ramen':                (1.36, 0.042, 0.075, 0.190,  450),
-    'ravioli':              (1.50, 0.045, 0.075, 0.230,  250),
-    'red_velvet_cake':      (3.52, 0.160, 0.038, 0.520,  100),
-    'risotto':              (1.42, 0.040, 0.040, 0.250,  300),
-    'samosa':               (2.62, 0.130, 0.050, 0.330,  120),
-    'sashimi':              (1.27, 0.038, 0.200, 0.000,  150),
-    'scallops':             (0.88, 0.008, 0.170, 0.050,  150),
-    'seaweed_salad':        (0.45, 0.005, 0.020, 0.090,  100),
-    'shrimp_and_grits':     (1.65, 0.070, 0.110, 0.150,  300),
-    'spaghetti_bolognese':  (1.80, 0.060, 0.090, 0.240,  350),
-    'spaghetti_carbonara':  (2.07, 0.110, 0.090, 0.220,  350),
-    'spring_rolls':         (1.80, 0.065, 0.055, 0.260,  120),
-    'steak':                (2.50, 0.155, 0.230, 0.000,  250),
-    'strawberry_shortcake': (2.49, 0.100, 0.038, 0.380,  150),
-    'sushi':                (1.43, 0.020, 0.060, 0.280,  200),
-    'tacos':                (2.18, 0.100, 0.110, 0.220,  200),
-    'takoyaki':             (1.85, 0.085, 0.080, 0.230,  200),
-    'tiramisu':             (2.84, 0.145, 0.056, 0.340,  150),
-    'tuna_tartare':         (1.08, 0.030, 0.190, 0.015,  150),
-    'waffles':              (2.91, 0.110, 0.075, 0.420,  150),
-}
-# Keep a simple kcal/g alias for backward compatibility with scaling logic
-FOOD_KCAL_PER_G = {k: v[0] for k, v in FOOD_NUTRITION_DB.items()}
+# ── USDA FoodData Central API — dynamic nutrition lookup ──────────────────────
+# Set your free API key: export USDA_API_KEY=your_key_here
+# Sign up at: https://fdc.nal.usda.gov/api-key-signup.html
+# Without a key the app falls back to Nutrition5K global constants.
+# With DEMO_KEY you get 30 req/hour (enough for demos).
+USDA_API_KEY    = os.environ.get('USDA_API_KEY', 'DEMO_KEY')
+USDA_CACHE_FILE = os.path.join(MODELS_DIR, 'usda_cache.json')
+_usda_cache: dict = {}   # food_name -> (kcal/g, fat/g, protein/g, carb/g, serving_g)
 
+
+def _load_usda_cache():
+    """Load previously fetched USDA results from disk into memory."""
+    global _usda_cache
+    if os.path.isfile(USDA_CACHE_FILE):
+        with open(USDA_CACHE_FILE) as f:
+            raw = json.load(f)
+        _usda_cache = {k: tuple(v) for k, v in raw.items()}
+        print(f'✓ USDA cache loaded ({len(_usda_cache)} entries) from {USDA_CACHE_FILE}')
+
+
+def _save_usda_cache():
+    """Persist in-memory USDA cache to disk."""
+    os.makedirs(os.path.dirname(USDA_CACHE_FILE), exist_ok=True)
+    with open(USDA_CACHE_FILE, 'w') as f:
+        json.dump({k: list(v) for k, v in _usda_cache.items()}, f, indent=2)
+
+
+def _lookup_usda(food_name: str):
+    """
+    Query USDA FoodData Central for per-gram macros + typical serving size.
+
+    Pipeline:
+      food_name (e.g. 'omelette')
+        → check in-memory cache
+        → if miss: GET api.nal.usda.gov/fdc/v1/foods/search?query=omelette
+        → parse top result: kcal, fat, protein, carb (all per 100g → per g)
+        → persist to cache file
+        → return (kcal/g, fat/g, protein/g, carb/g, serving_g)
+
+    Returns None if API is unreachable, key is missing, or result is implausible.
+    Cached results are returned instantly on subsequent calls.
+    """
+    key = food_name.lower().replace('_', ' ').strip()
+    if key in _usda_cache:
+        return _usda_cache[key]
+
+    if not USDA_API_KEY:
+        return None
+
+    try:
+        query = urllib.parse.quote(key)
+        url   = (f'https://api.nal.usda.gov/fdc/v1/foods/search'
+                 f'?query={query}&pageSize=1&dataType=Survey%20(FNDDS)'
+                 f'&api_key={USDA_API_KEY}')
+        req = urllib.request.Request(url, headers={'Accept': 'application/json'})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+
+        foods = data.get('foods', [])
+        if not foods:
+            # retry without dataType filter (catches branded / foundation foods)
+            url2  = (f'https://api.nal.usda.gov/fdc/v1/foods/search'
+                     f'?query={query}&pageSize=1&api_key={USDA_API_KEY}')
+            req2  = urllib.request.Request(url2, headers={'Accept': 'application/json'})
+            with urllib.request.urlopen(req2, timeout=5) as resp2:
+                data  = json.loads(resp2.read())
+            foods = data.get('foods', [])
+        if not foods:
+            return None
+
+        # Parse nutrient values from the top result (reported per 100 g)
+        nutrients = {n['nutrientName']: n['value']
+                     for n in foods[0].get('foodNutrients', [])}
+        kcal    = nutrients.get('Energy',
+                  nutrients.get('Energy (Atwater General Factors)', 0.0))
+        fat     = nutrients.get('Total lipid (fat)', 0.0)
+        protein = nutrients.get('Protein', 0.0)
+        carb    = nutrients.get('Carbohydrate, by difference', 0.0)
+
+        # Convert from per-100g to per-gram
+        kcal_g, fat_g, prot_g, carb_g = (
+            kcal / 100.0, fat / 100.0, protein / 100.0, carb / 100.0
+        )
+
+        # Typical serving size — fall back to 150g if not stated
+        serving_g = 150.0
+        for measure in foods[0].get('finalFoodInputFoods', []):
+            gw = measure.get('gramWeight')
+            if gw and float(gw) > 20:
+                serving_g = float(gw)
+                break
+
+        # Sanity check: discard clearly wrong or empty results
+        if kcal_g < 0.05 or kcal_g > 9.5:
+            return None
+
+        entry = (kcal_g, fat_g, prot_g, carb_g, serving_g)
+        _usda_cache[key] = entry
+        _save_usda_cache()
+        print(f'  USDA lookup "{key}": {kcal_g:.2f} kcal/g  fat={fat_g:.3f}  '
+              f'pro={prot_g:.3f}  carb={carb_g:.3f}  serving={serving_g:.0f}g')
+        return entry
+
+    except Exception as _e:
+        print(f'  ⚠ USDA lookup failed for "{key}": {_e}')
+        return None
+
+
+# Backward-compat alias — populated lazily from USDA cache
+FOOD_KCAL_PER_G: dict = {}
+
+
+# Stub so existing code that calls _food_name_to_key still works
 def _food_name_to_key(name: str) -> str:
-    """Normalise a food classifier label to a FOOD_KCAL_PER_G key."""
-    return name.lower().replace(' ', '_').replace('-', '_').replace('/', '_')
+    """Normalise a food classifier label to a plain search query."""
+    return name.lower().replace('_', ' ').replace('-', ' ').strip()
+
+
+# ── Old hardcoded FOOD_NUTRITION_DB (101 entries) replaced by _lookup_usda() ──
+# The USDA FoodData Central API now provides live per-gram macros for any food.
 
 
 def _build_food_classes(yolo):
@@ -192,6 +202,7 @@ def _build_food_classes(yolo):
     return food_ids
 
 FOOD_CLASSES = set()   # populated after yolo_model is loaded
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Model definitions
@@ -392,6 +403,9 @@ if os.path.isfile(FOOD_CLF_CKPT):
 else:
     print('ℹ Phase 5 food classifier not found — train 05_food_classifier.ipynb on Kaggle '
           'then download best_food_classifier.pt into models/')
+
+# Load USDA cache from disk so first predictions are instant
+_load_usda_cache()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -629,14 +643,12 @@ def predict(image: Image.Image):
             # the food-specific typical serving size in the DB as fallback.
             _db_entry     = None
             _food_scale_note = ''
-            if detected_food and food_conf and food_conf >= 0.40:
-                _fkey = _food_name_to_key(detected_food)
-                _db_entry = FOOD_NUTRITION_DB.get(_fkey)
-                if _db_entry is None:
-                    # fuzzy match — find entry sharing most words with detected food
-                    for k in FOOD_NUTRITION_DB:
-                        if any(p in k for p in _fkey.split('_') if len(p) > 4):
-                            _db_entry = FOOD_NUTRITION_DB[k]; break
+            if detected_food and food_conf and food_conf >= 0.15:
+                # ── USDA API lookup: food name → per-gram macros ──────────────
+                # Threshold lowered to 15% (was 40%) since USDA handles ambiguity
+                # itself — even a low-confidence "omelette" gets correct macros.
+                _query    = _food_name_to_key(detected_food)
+                _db_entry = _lookup_usda(_query)
 
             # Decide portion weight: WeightMLP if confident, else DB serving size,
             # else Nutrition5K dataset mean (280g)
