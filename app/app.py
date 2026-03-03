@@ -418,8 +418,18 @@ def predict(image: Image.Image):
                     weight_samples.append(weight_mlp_model(x).item())
             weight_mlp_model.eval()
 
-            w_mean = max(float(np.mean(weight_samples)), 10.0)   # clamp ≥ 10g
+            w_raw  = float(np.mean(weight_samples))
             w_std  = float(np.std(weight_samples))
+
+            # Fallback: if model is very uncertain (domain shift from real photos),
+            # use the Nutrition5K mean dish weight (~280g) instead of a near-zero prediction
+            DATASET_MEAN_WEIGHT = 280.0   # kcal-weighted mean across Nutrition5K
+            MIN_WEIGHT          = 50.0    # absolute floor — no recognisable dish is <50g
+            _used_fallback = w_raw < MIN_WEIGHT or (w_std > abs(w_raw) and w_raw < DATASET_MEAN_WEIGHT)
+            if _used_fallback:
+                w_mean = DATASET_MEAN_WEIGHT
+            else:
+                w_mean = max(w_raw, MIN_WEIGHT)
 
             # Apply dataset constants: nutrition = weight × constant
             const_keys = list(nutrition_constants.keys())  # e.g. calories_per_g, ...
@@ -428,7 +438,8 @@ def predict(image: Image.Image):
             std_pred  = np.array([w_std  * nutrition_constants[k] for k in const_keys],
                                  dtype=np.float32)
             # target_cols was set from const keys at load time
-            mode_extra = f'\n_Predicted weight: **{w_mean:.0f} ± {w_std*2:.0f}g** (MC Dropout, 30 samples)_'
+            _fallback_note = ' — low-confidence, used dataset mean' if _used_fallback else ''
+            mode_extra = f'\n_Predicted weight: **{w_mean:.0f} ± {w_std*2:.0f}g** (MC Dropout, 30 samples{_fallback_note})_'
         else:
             # ── Phase 4: direct regression ─────────────────────────────────────
             mlp.eval()
