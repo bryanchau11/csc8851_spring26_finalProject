@@ -675,11 +675,11 @@ val_transform = T.Compose([
 
 def predict(image: Image.Image):
     if image is None:
-        return 'Please upload an image.', None, []
+        return 'Please upload an image.', None, [], ''
 
     if pipeline_mode is None:
         return ('No model checkpoint found. Download best_mlp.pt + mlp_feat_stats.npz '
-                'from Kaggle output and place them in models/.'), None, []
+                'from Kaggle output and place them in models/.'), None, [], ''
 
     if pipeline_mode in ('full', 'phase6', 'phase4'):
         # ── Step 1 (Phase 4/6 shared): YOLO mask + MiDaS depth → 9 features ──────
@@ -705,6 +705,7 @@ def predict(image: Image.Image):
         w_mean  = None
         w_std_mc = 0.0
         _weight_note = ''
+        _weight_breakdown_md = ''   # filled in when WeightMLP is available
         if weight_mlp_model is not None:
             weight_mlp_model.eval()
             for m in weight_mlp_model.modules():
@@ -782,6 +783,74 @@ def predict(image: Image.Image):
             p6_std  = np.array([w_std_mc * active_constants[k] for k in const_keys], dtype=np.float32)
             _src = 'DB serving' if (_used_fallback and _db_entry) else ('fallback' if _used_fallback else 'WeightMLP')
             _weight_note = f'**{w_mean:.0f}±{w_std_mc*2:.0f}g** ({_src}){_food_scale_note}'
+
+            # ── Build weight breakdown explanation for UI display ───────────────────────
+            _FEAT_NAMES = [
+                ('mask_area', 'Food mask fraction (0–1)    YOLO segmentation area'),
+                ('d_mean',    'Mean depth — whole image     MiDaS relative depth'),
+                ('d_std',     'Std depth — whole image      MiDaS spread'),
+                ('d_med',     'Median depth — whole image   MiDaS robust centre'),
+                ('d_max',     'Max depth — whole image      MiDaS furthest point'),
+                ('md_mean',   'Mean depth — food mask       depth of food pixels'),
+                ('md_std',    'Std depth — food mask        food depth spread'),
+                ('md_med',    'Median depth — food mask     food robust centre'),
+                ('md_max',    'Max depth — food mask        highest food point'),
+            ]
+            # Un-normalise feat_raw back to physical scale for readability
+            _feat_unnorm = (feat_raw * feat_std.flatten() + feat_mean.flatten())
+            _feat_rows = '\n'.join(
+                f'| `{nm}` | {_feat_unnorm[i]:.4f} | {desc} |'
+                for i, (nm, desc) in enumerate(_FEAT_NAMES)
+            )
+
+            # MC Dropout distribution
+            _w_arr = np.array(_w_samples)
+            _w_lo  = float(np.percentile(_w_arr, 2.5))
+            _w_hi  = float(np.percentile(_w_arr, 97.5))
+
+            # Fallback explanation
+            if _used_fallback:
+                if _size_fallback:
+                    _fb_why = (f'WeightMLP raw = **{w_raw:.0f} g** '
+                               f'< 40% × USDA serving {_usda_serving:.0f} g = {0.4*_usda_serving:.0f} g '
+                               f'— likely a depth artefact (bowl/plate seen from above)')
+                elif _cv_fallback:
+                    _fb_why = (f'High MC-Dropout uncertainty '
+                               f'(σ = {w_std_mc:.0f} g > raw mean {w_raw:.0f} g) — unreliable prediction')
+                else:
+                    _fb_why = f'Raw prediction {w_raw:.0f} g ≤ 50 g hard floor'
+                _step3_txt = (f'⚠️ **Fallback triggered**: {_fb_why}  \n'
+                              f'Using **USDA serving = {w_mean:.0f} g** instead')
+            else:
+                _step3_txt = (f'✔️ **WeightMLP accepted** — {w_raw:.0f} g ≥ 40% of '
+                              f'USDA serving {_usda_serving:.0f} g')
+
+            # Per-macro calorie equation rows
+            _density_src = (f'USDA "{_food_name_to_key(detected_food)}"'
+                            if _db_entry is not None else 'Nutrition5K global constants')
+            _cal_rows = '\n'.join(
+                f'| **{k.replace("_per_g","")}** | {w_mean:.0f} g | × {v:.4f} /g | **{w_mean*v:.1f}** |'
+                for k, v in active_constants.items()
+            )
+
+            _weight_breakdown_md = (
+                f'### ⚖ How the weight was predicted\n\n'
+                f'**Step 1 — Geometric features** (YOLO segmentation mask + MiDaS monocular depth map):\n\n'
+                f'| Feature | Value | Description |\n'
+                f'|---|---|---|\n'
+                f'{_feat_rows}\n\n'
+                f'**Step 2 — WeightMLP MC-Dropout** (30 stochastic forward passes, dropout kept active):  \n'
+                f'- Raw mean: **{w_raw:.0f} g** \u00b7 σ = {w_std_mc:.0f} g  \n'
+                f'- 95% credible interval: [{_w_lo:.0f} g — {_w_hi:.0f} g]  \n'
+                f'- Architecture: Linear(9→128) → BN → ReLU → Dropout \u00d73 → Linear(32→1)  \n\n'
+                f'**Step 3 — Serving-size decision**:  \n{_step3_txt}  \n'
+                f'**Final weight used: {w_mean:.0f} g**\n\n'
+                f'**Step 4 — Nutrition equation** (density source: {_density_src}):  \n'
+                f'`nutrition = weight × density`\n\n'
+                f'| Macro | Weight | Density | Result |\n'
+                f'|---|---|---|---|\n'
+                f'{_cal_rows}\n'
+            )
 
         # ── Step 4 (Phase 4): direct regression via MLP ───────────────────────────
         p4_mean = p4_std = None
@@ -885,10 +954,11 @@ def predict(image: Image.Image):
         result_json = {col: f'{v:.1f}' for col, v in zip(target_cols, mean_pred)}
         mode_note  = '_Pipeline: ResNet-50 direct regression (Phase 3 baseline)_'
         ingredient_rows = [['N/A (ResNet baseline — no segmentation)', '—', '—', '—']]
+        _weight_breakdown_md = '_Weight prediction not available in Phase 3 baseline (ResNet-50 direct regression, no YOLO/MiDaS)._'
 
     label_txt = '\n'.join([f'{col}: {result_json[col]}' for col in target_cols])
     label_txt += f'\n\n{mode_note}\n> Units: kcal for calories, grams for macros'
-    return label_txt, result_json, ingredient_rows
+    return label_txt, result_json, ingredient_rows, _weight_breakdown_md
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -930,8 +1000,16 @@ with gr.Blocks(title='Nutrition5K Estimator') as demo:
         interactive=False,
     )
 
+    with gr.Accordion('⚖ Weight Prediction Details', open=False):
+        weight_detail_out = gr.Markdown(
+            value='_Run a prediction to see the weight breakdown._'
+        )
+
     predict_btn = gr.Button('Predict 🔍', variant='primary')
-    predict_btn.click(fn=predict, inputs=img_input, outputs=[text_out, json_out, ingredient_table])
+    predict_btn.click(
+        fn=predict, inputs=img_input,
+        outputs=[text_out, json_out, ingredient_table, weight_detail_out]
+    )
 
     gr.Markdown(
         '> **Tips**: Works best with a single dish centred in frame.  \n'
