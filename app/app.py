@@ -37,12 +37,29 @@ device = torch.device('cuda' if torch.cuda.is_available() else
                       'mps'  if torch.backends.mps.is_available() else
                       'cpu')
 
-# ── COCO food-relevant class IDs for YOLO ─────────────────────────────────────
-FOOD_CLASSES = {
-    40, 41, 42, 43, 44, 45,          # glass/cup/fork/knife/spoon/bowl
-    46, 47, 48, 49, 50, 51,          # banana/apple/sandwich/orange/broccoli/carrot
-    52, 53, 54, 55, 60,              # hot dog/pizza/donut/cake/dining table
+# ── Food class filtering — built dynamically from YOLO's own class names ───────
+# Keywords that indicate food or food containers; non-food items like
+# "dining table", "fork", "knife", "spoon" are excluded.
+_FOOD_KEYWORDS = {
+    'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot',
+    'hot dog', 'pizza', 'donut', 'cake', 'bowl', 'cup', 'wine glass',
+    'bottle', 'salad', 'egg', 'meat', 'rice', 'bread', 'cheese',
+    'burger', 'sushi', 'noodle', 'soup', 'fruit', 'vegetable',
 }
+_NON_FOOD = {'dining table', 'fork', 'knife', 'spoon', 'chopsticks'}
+
+def _build_food_classes(yolo):
+    """Return set of class IDs whose names match food keywords."""
+    food_ids = set()
+    for cid, name in yolo.names.items():
+        n = name.lower()
+        if n in _NON_FOOD:
+            continue
+        if any(kw in n for kw in _FOOD_KEYWORDS):
+            food_ids.add(int(cid))
+    return food_ids
+
+FOOD_CLASSES = set()   # populated after yolo_model is loaded
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Model definitions
@@ -89,6 +106,8 @@ if os.path.isfile(P4_CKPT) and os.path.isfile(P4_STATS):
     try:
         from ultralytics import YOLO as _YOLO
         yolo_model = _YOLO('yolov8n-seg.pt')
+        FOOD_CLASSES.update(_build_food_classes(yolo_model))
+        print(f'✓ YOLO food classes: {[yolo_model.names[i] for i in sorted(FOOD_CLASSES)]}')
 
         stats = np.load(P4_STATS, allow_pickle=True)
         feat_mean   = stats['feat_mean'].astype(np.float32)
@@ -130,7 +149,8 @@ if pipeline_mode is None:
 # Feature extraction helpers (Phase 4)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _get_food_mask(pil_img: Image.Image) -> np.ndarray:
+def _get_food_mask(pil_img: Image.Image):
+    """Returns (mask np.ndarray, detected_items list[dict{name, area_ratio}])."""
     img_bgr = cv2.cvtColor(np.array(pil_img.convert('RGB')), cv2.COLOR_RGB2BGR)
     H, W    = img_bgr.shape[:2]
 
@@ -139,24 +159,38 @@ def _get_food_mask(pil_img: Image.Image) -> np.ndarray:
     cv2.circle(fallback, (W // 2, H // 2), int(min(H, W) * 0.3), 1.0, -1)
 
     if yolo_model is None:
-        return cv2.resize(fallback, (IMG_SIZE, IMG_SIZE))
+        return cv2.resize(fallback, (IMG_SIZE, IMG_SIZE)), []
 
     results  = yolo_model(img_bgr, verbose=False)[0]
     if results.masks is None or len(results.masks) == 0:
-        return cv2.resize(fallback, (IMG_SIZE, IMG_SIZE))
+        return cv2.resize(fallback, (IMG_SIZE, IMG_SIZE)), []
 
     classes  = results.boxes.cls.cpu().numpy().astype(int)
-    food_idx = [i for i, c in enumerate(classes) if c in FOOD_CLASSES] or list(range(len(classes)))
+    confs    = results.boxes.conf.cpu().numpy()
+    food_idx = [i for i, c in enumerate(classes) if c in FOOD_CLASSES]
+
+    # If no recognised food items detected, use centre-crop fallback with no items listed
+    if not food_idx:
+        return cv2.resize(fallback, (IMG_SIZE, IMG_SIZE)), []
 
     combined = np.zeros((H, W), dtype=np.float32)
+    item_masks = []
     for i in food_idx:
         m = cv2.resize(results.masks[i].data[0].cpu().numpy(), (W, H))
-        combined = np.maximum(combined, m)
+        m_bin = (m > 0.5).astype(np.float32)
+        combined = np.maximum(combined, m_bin)
+        item_masks.append({
+            'name': yolo_model.names.get(int(classes[i]), f'Item {i+1}').replace('_', ' ').title(),
+            'conf': float(confs[i]),
+            'area': float(m_bin.mean()),
+        })
 
     combined = (combined > 0.5).astype(np.float32)
     if combined.sum() < 100:
         combined = fallback
-    return cv2.resize(combined, (IMG_SIZE, IMG_SIZE))
+        item_masks = []
+
+    return cv2.resize(combined, (IMG_SIZE, IMG_SIZE)), item_masks
 
 
 def _get_depth_map(pil_img: Image.Image) -> np.ndarray:
@@ -173,8 +207,9 @@ def _get_depth_map(pil_img: Image.Image) -> np.ndarray:
         return np.full((IMG_SIZE, IMG_SIZE), 0.5, dtype=np.float32)
 
 
-def _extract_features(pil_img: Image.Image) -> np.ndarray:
-    mask  = _get_food_mask(pil_img)
+def _extract_features(pil_img: Image.Image):
+    """Returns (feature_vector np.ndarray shape (9,), detected_items list)."""
+    mask, items = _get_food_mask(pil_img)
     depth = _get_depth_map(pil_img)
 
     mask_area = mask.mean()
@@ -190,7 +225,7 @@ def _extract_features(pil_img: Image.Image) -> np.ndarray:
     feat = np.array([mask_area,
                      d_mean, d_std, d_med, d_max,
                      md_mean, md_std, md_med, md_max], dtype=np.float32)
-    return (feat - feat_mean) / feat_std
+    return ((feat - feat_mean) / feat_std).flatten(), items  # shape (9,)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -205,30 +240,48 @@ val_transform = T.Compose([
 
 def predict(image: Image.Image):
     if image is None:
-        return 'Please upload an image.', None
+        return 'Please upload an image.', None, []
 
     if pipeline_mode is None:
         return ('No model checkpoint found. Download best_mlp.pt + mlp_feat_stats.npz '
-                'from Kaggle output and place them in models/.'), None
+                'from Kaggle output and place them in models/.'), None, []
 
     if pipeline_mode == 'phase4':
-        feat = _extract_features(image)
+        feat, items = _extract_features(image)
         x    = torch.tensor(feat).unsqueeze(0).to(device)
 
-        # MC Dropout uncertainty
-        mlp.train()
+        # MC Dropout uncertainty — keep Dropout active but BatchNorm in eval
+        # Use fixed seed so same image always gives same result
+        mlp.eval()
+        for m in mlp.modules():
+            if isinstance(m, nn.Dropout):
+                m.train()
+        torch.manual_seed(42)
         preds_mc = []
         with torch.no_grad():
             for _ in range(MC_SAMPLES):
                 preds_mc.append(mlp(x).squeeze(0).cpu().numpy())
+        # Reset back to full eval so next call starts clean
+        mlp.eval()
         preds_mc = np.stack(preds_mc)
         mean_pred = preds_mc.mean(0)
         std_pred  = preds_mc.std(0)
 
-        rows = []
-        for col, mu, sigma in zip(target_cols, mean_pred, std_pred):
-            rows.append(f'**{col}**: {mu:.1f} ± {sigma*2:.1f}  _(95% CI)_')
-        result_md = '\n\n'.join(rows)
+        # Find calories index for per-item breakdown
+        cal_idx = next((i for i, c in enumerate(target_cols) if 'cal' in c.lower()), 0)
+        total_cal = float(mean_pred[cal_idx])
+
+        # Build ingredient table (proportional calorie split by mask area)
+        if items:
+            total_area = sum(it['area'] for it in items) or 1.0
+            ingredient_rows = []
+            for it in items:
+                frac = it['area'] / total_area
+                item_cal = total_cal * frac
+                ingredient_rows.append([it['name'], f"{item_cal:.0f}", f"{it['conf']*100:.0f}%"])
+        else:
+            ingredient_rows = [['Unknown dish (YOLO-COCO has no matching class)', f"{total_cal:.0f}", '—']]
+
         result_json = {col: f'{mu:.1f} ± {sig*2:.1f}' for col, mu, sig in zip(target_cols, mean_pred, std_pred)}
         mode_note = '_Pipeline: YOLOv8-seg → MiDaS depth → MLP + MC Dropout_'
 
@@ -238,10 +291,11 @@ def predict(image: Image.Image):
             mean_pred = p3_model(img_t).squeeze(0).cpu().numpy()
         result_json = {col: f'{v:.1f}' for col, v in zip(target_cols, mean_pred)}
         mode_note  = '_Pipeline: ResNet-50 direct regression (Phase 3 baseline)_'
+        ingredient_rows = [['N/A (ResNet baseline — no segmentation)', '—', '—']]
 
     label_txt = '\n'.join([f'{col}: {result_json[col]}' for col in target_cols])
     label_txt += f'\n\n{mode_note}\n> Units: kcal for calories, grams for macros'
-    return label_txt, result_json
+    return label_txt, result_json, ingredient_rows
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -261,13 +315,21 @@ with gr.Blocks(title='Nutrition5K Estimator') as demo:
         f'**Active pipeline**: {mode_label.get(pipeline_mode, "unknown")}'
     )
     with gr.Row():
-        img_input   = gr.Image(type='pil', label='Upload Dish Image')
+        img_input = gr.Image(type='pil', label='Upload Dish Image')
         with gr.Column():
-            text_out = gr.Markdown(label='Prediction')
+            text_out = gr.Markdown(label='Nutrition Prediction')
             json_out = gr.JSON(label='Raw values')
 
+    gr.Markdown('### 🥦 Detected Ingredients & Calorie Breakdown')
+    ingredient_table = gr.Dataframe(
+        headers=['Ingredient', 'Est. Calories (kcal)', 'Confidence'],
+        datatype=['str', 'str', 'str'],
+        label='YOLO-detected items (only COCO classes: bowl, apple, banana, sandwich, pizza, etc. — most Nutrition5K dishes show as unknown)',
+        interactive=False,
+    )
+
     predict_btn = gr.Button('Predict', variant='primary')
-    predict_btn.click(fn=predict, inputs=img_input, outputs=[text_out, json_out])
+    predict_btn.click(fn=predict, inputs=img_input, outputs=[text_out, json_out, ingredient_table])
 
     gr.Markdown(
         '> **Note**: Best results with overhead-style plated dish photos '
