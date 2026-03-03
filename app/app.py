@@ -393,13 +393,37 @@ else:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _get_food_mask(pil_img: Image.Image):
-    """Returns (mask np.ndarray, detected_items list[dict{name, area_ratio}])."""
+    """Returns (mask np.ndarray, detected_items list[dict{name, area_ratio}]).
+
+    Fallback strategy (most real-world food photos lack COCO food classes):
+      1. YOLO food class match  → use those masks (best)
+      2. YOLO found other objects → use union of non-person/non-vehicle masks
+         (dining table, utensils, containers are good food-location proxies)
+      3. Everything else         → central 60%×60% rectangle
+    """
     img_bgr = cv2.cvtColor(np.array(pil_img.convert('RGB')), cv2.COLOR_RGB2BGR)
     H, W    = img_bgr.shape[:2]
 
-    # Circular centre fallback
+    # Central rectangle fallback — covers 60% of H and W, much better than
+    # a small circle for centred real-world food photos.
     fallback = np.zeros((H, W), dtype=np.float32)
-    cv2.circle(fallback, (W // 2, H // 2), int(min(H, W) * 0.3), 1.0, -1)
+    y0f, y1f = int(H * 0.2), int(H * 0.8)
+    x0f, x1f = int(W * 0.2), int(W * 0.8)
+    fallback[y0f:y1f, x0f:x1f] = 1.0
+
+    # Classes to skip when building the second-chance proxy mask
+    _SKIP_CLASSES = {
+        'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train',
+        'truck', 'boat', 'traffic light', 'fire hydrant', 'stop sign',
+        'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep',
+        'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella',
+        'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard',
+        'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard',
+        'surfboard', 'tennis racket', 'chair', 'couch', 'bed', 'toilet', 'tv',
+        'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 'microwave',
+        'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase',
+        'scissors', 'teddy bear', 'hair drier', 'toothbrush',
+    }
 
     if yolo_model is None:
         return cv2.resize(fallback, (IMG_SIZE, IMG_SIZE)), []
@@ -412,8 +436,23 @@ def _get_food_mask(pil_img: Image.Image):
     confs    = results.boxes.conf.cpu().numpy()
     food_idx = [i for i, c in enumerate(classes) if c in FOOD_CLASSES]
 
-    # If no recognised food items detected, use centre-crop fallback with no items listed
     if not food_idx:
+        # Second-chance: union of any non-person/non-vehicle objects (dining
+        # table, fork/knife/spoon, potted plant, etc. all reliably co-occur
+        # with food in real-world food photos).
+        proxy_idx = [
+            i for i, c in enumerate(classes)
+            if yolo_model.names.get(int(c), '').lower() not in _SKIP_CLASSES
+        ]
+        if proxy_idx:
+            combined = np.zeros((H, W), dtype=np.float32)
+            for i in proxy_idx:
+                m = cv2.resize(results.masks[i].data[0].cpu().numpy(), (W, H))
+                combined = np.maximum(combined, (m > 0.5).astype(np.float32))
+            combined = (combined > 0.5).astype(np.float32)
+            if combined.sum() > 500:   # at least 500 px must be covered
+                return cv2.resize(combined, (IMG_SIZE, IMG_SIZE)), []
+        # Nothing useful from YOLO → central-rectangle fallback
         return cv2.resize(fallback, (IMG_SIZE, IMG_SIZE)), []
 
     combined = np.zeros((H, W), dtype=np.float32)
