@@ -15,23 +15,26 @@ Required files in models/:
     best_model.pt        ← Phase 3 ResNet fallback
 """
 
-import os, warnings
+import os, json, warnings
 import numpy as np
 import cv2
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision.models as tv_models
 import torchvision.transforms as T
 from PIL import Image
 import gradio as gr
 warnings.filterwarnings('ignore')
 
-MODELS_DIR = os.path.join(os.path.dirname(__file__), '..', 'models')
-P4_CKPT    = os.path.join(MODELS_DIR, 'best_mlp.pt')
-P4_STATS   = os.path.join(MODELS_DIR, 'mlp_feat_stats.npz')
-P3_CKPT    = os.path.join(MODELS_DIR, 'best_model.pt')
-IMG_SIZE   = 224
-MC_SAMPLES = 30
+MODELS_DIR    = os.path.join(os.path.dirname(__file__), '..', 'models')
+P4_CKPT       = os.path.join(MODELS_DIR, 'best_mlp.pt')
+P4_STATS      = os.path.join(MODELS_DIR, 'mlp_feat_stats.npz')
+P3_CKPT       = os.path.join(MODELS_DIR, 'best_model.pt')
+FOOD_CLF_CKPT = os.path.join(MODELS_DIR, 'best_food_classifier.pt')
+FOOD_CLF_LBLS = os.path.join(MODELS_DIR, 'food101_labels.json')
+IMG_SIZE      = 224
+MC_SAMPLES    = 30
 
 device = torch.device('cuda' if torch.cuda.is_available() else
                       'mps'  if torch.backends.mps.is_available() else
@@ -92,6 +95,26 @@ class NutritionEstimator(nn.Module):
     def forward(self, x): return self.head(self.backbone(x))
 
 
+class FoodClassifier(nn.Module):
+    """Phase 5 — EfficientNet-B0 fine-tuned on Food-101 (101 classes)."""
+    def __init__(self, num_classes: int = 101):
+        super().__init__()
+        import timm
+        self.backbone = timm.create_model('efficientnet_b0', pretrained=False,
+                                          num_classes=0, global_pool='avg')
+        feat_dim = self.backbone.num_features   # 1280
+        self.head = nn.Sequential(
+            nn.Dropout(0.3),
+            nn.Linear(feat_dim, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.15),
+            nn.Linear(512, num_classes),
+        )
+    def forward(self, x):
+        return self.head(self.backbone(x))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Load models at startup
 # ─────────────────────────────────────────────────────────────────────────────
@@ -100,6 +123,10 @@ pipeline_mode = None   # 'phase4' or 'phase3'
 mlp = yolo_model = midas_model = midas_transform = None
 feat_mean = feat_std = None
 target_cols = ['calories', 'fat', 'protein', 'carbs']
+
+# Phase 5 food classifier (optional — loaded if checkpoint exists)
+food_clf        = None
+food_clf_labels = []   # list[str] index → class name
 
 # ── Try Phase 4 ───────────────────────────────────────────────────────────────
 if os.path.isfile(P4_CKPT) and os.path.isfile(P4_STATS):
@@ -143,6 +170,31 @@ if pipeline_mode is None:
     else:
         print('⚠ No checkpoint found. Place best_mlp.pt + mlp_feat_stats.npz '
               '(or best_model.pt) in models/')
+
+# ── Try Phase 5 food classifier (optional — runs alongside Phase 4) ───────────
+if os.path.isfile(FOOD_CLF_CKPT):
+    try:
+        import timm  # noqa: F401  (ensure timm is importable before instantiating)
+        _clf_ckpt = torch.load(FOOD_CLF_CKPT, map_location=device, weights_only=False)
+        _num_cls  = len(_clf_ckpt.get('class_names', []))
+        if _num_cls == 0:
+            _num_cls = 101
+        food_clf = FoodClassifier(num_classes=_num_cls).to(device)
+        food_clf.load_state_dict(_clf_ckpt['model_state_dict'])
+        food_clf.eval()
+        # Use class_names from checkpoint, or fall back to food101_labels.json
+        if 'class_names' in _clf_ckpt:
+            food_clf_labels = _clf_ckpt['class_names']
+        elif os.path.isfile(FOOD_CLF_LBLS):
+            with open(FOOD_CLF_LBLS) as _f:
+                _lbl_map = json.load(_f)
+            food_clf_labels = [_lbl_map[str(i)] for i in range(len(_lbl_map))]
+        print(f'✓ Phase 5 food classifier loaded  ({_num_cls} classes)')
+    except Exception as _e:
+        print(f'⚠ Phase 5 classifier load failed ({_e}) — food type detection disabled')
+else:
+    print('ℹ Phase 5 food classifier not found — train 05_food_classifier.ipynb on Kaggle '
+          'then download best_food_classifier.pt into models/')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -193,6 +245,49 @@ def _get_food_mask(pil_img: Image.Image):
     return cv2.resize(combined, (IMG_SIZE, IMG_SIZE)), item_masks
 
 
+def _classify_food_type(pil_img: Image.Image, mask: np.ndarray, top_k: int = 3):
+    """
+    Phase 5: Crop the food region and classify using EfficientNet-B0.
+    Returns list of (display_name, confidence_float) sorted best-first.
+    Returns [] if food_clf is not loaded.
+    """
+    if food_clf is None or not food_clf_labels:
+        return []
+
+    # ── Crop bounding box of the mask region ─────────────────────────────────
+    H_img, W_img = np.array(pil_img.convert('RGB')).shape[:2]
+    # Resize mask to match original image dimensions (mask may be 224×224)
+    mask_full = cv2.resize(mask, (W_img, H_img))
+    ys, xs    = np.where(mask_full > 0.5)
+    if len(ys) > 0:
+        y0, y1 = int(ys.min()), int(ys.max())
+        x0, x1 = int(xs.min()), int(xs.max())
+        pad_y  = max(4, int((y1 - y0) * 0.05))
+        pad_x  = max(4, int((x1 - x0) * 0.05))
+        y0 = max(0, y0 - pad_y);  y1 = min(H_img, y1 + pad_y)
+        x0 = max(0, x0 - pad_x);  x1 = min(W_img, x1 + pad_x)
+        crop = pil_img.crop((x0, y0, x1, y1))
+    else:
+        crop = pil_img  # no mask → use full image
+
+    _clf_transform = T.Compose([
+        T.Resize(256), T.CenterCrop(224), T.ToTensor(),
+        T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+    ])
+    x = _clf_transform(crop.convert('RGB')).unsqueeze(0).to(device)
+
+    food_clf.eval()
+    with torch.no_grad():
+        logits = food_clf(x).squeeze(0)
+    probs  = F.softmax(logits, dim=0).cpu().numpy()
+    topk_i = probs.argsort()[-top_k:][::-1]
+
+    return [
+        (food_clf_labels[int(i)].replace('_', ' ').title(), float(probs[int(i)]))
+        for i in topk_i
+    ]
+
+
 def _get_depth_map(pil_img: Image.Image) -> np.ndarray:
     if midas_model is None:
         return np.full((IMG_SIZE, IMG_SIZE), 0.5, dtype=np.float32)
@@ -225,7 +320,8 @@ def _extract_features(pil_img: Image.Image):
     feat = np.array([mask_area,
                      d_mean, d_std, d_med, d_max,
                      md_mean, md_std, md_med, md_max], dtype=np.float32)
-    return ((feat - feat_mean) / feat_std).flatten(), items  # shape (9,)
+    norm_feat = ((feat - feat_mean) / feat_std).flatten()  # shape (9,)
+    return norm_feat, items, mask  # also return raw mask for food classification
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -247,7 +343,7 @@ def predict(image: Image.Image):
                 'from Kaggle output and place them in models/.'), None, []
 
     if pipeline_mode == 'phase4':
-        feat, items = _extract_features(image)
+        feat, items, raw_mask = _extract_features(image)
         x    = torch.tensor(feat).unsqueeze(0).to(device)
 
         # MC Dropout uncertainty — keep Dropout active but BatchNorm in eval
@@ -271,6 +367,11 @@ def predict(image: Image.Image):
         cal_idx = next((i for i, c in enumerate(target_cols) if 'cal' in c.lower()), 0)
         total_cal = float(mean_pred[cal_idx])
 
+        # Phase 5: classify food type from the image crop
+        food_type_preds = _classify_food_type(image, raw_mask, top_k=3)
+        detected_food   = food_type_preds[0][0] if food_type_preds else None
+        food_conf       = food_type_preds[0][1] if food_type_preds else None
+
         # Build ingredient table (proportional calorie split by mask area)
         if items:
             total_area = sum(it['area'] for it in items) or 1.0
@@ -278,12 +379,22 @@ def predict(image: Image.Image):
             for it in items:
                 frac = it['area'] / total_area
                 item_cal = total_cal * frac
-                ingredient_rows.append([it['name'], f"{item_cal:.0f}", f"{it['conf']*100:.0f}%"])
+                # Override YOLO class name with food classifier result if available
+                display_name = detected_food if detected_food else it['name']
+                conf_str     = f"{food_conf*100:.0f}%" if food_conf else f"{it['conf']*100:.0f}%"
+                ingredient_rows.append([display_name, f"{item_cal:.0f}", conf_str])
         else:
-            ingredient_rows = [['Unknown dish (YOLO-COCO has no matching class)', f"{total_cal:.0f}", '—']]
+            if detected_food:
+                ingredient_rows = [[detected_food, f"{total_cal:.0f}", f"{food_conf*100:.0f}%"]]
+                # Show top-3 alternatives in extra rows
+                for alt_name, alt_conf in food_type_preds[1:]:
+                    ingredient_rows.append([f'  (alt) {alt_name}', '—', f"{alt_conf*100:.0f}%"])
+            else:
+                ingredient_rows = [['Unknown dish (YOLO-COCO has no matching class)', f"{total_cal:.0f}", '—']]
 
         result_json = {col: f'{mu:.1f} ± {sig*2:.1f}' for col, mu, sig in zip(target_cols, mean_pred, std_pred)}
-        mode_note = '_Pipeline: YOLOv8-seg → MiDaS depth → MLP + MC Dropout_'
+        clf_note  = f'🍽 Detected food: **{detected_food}** ({food_conf*100:.0f}% confidence)\n\n' if detected_food else ''
+        mode_note = f'{clf_note}_Pipeline: YOLOv8-seg → EfficientNet-B0 food type → MiDaS depth → MLP + MC Dropout_'
 
     else:  # phase3
         img_t = val_transform(image.convert('RGB')).unsqueeze(0).to(device)
@@ -303,16 +414,19 @@ def predict(image: Image.Image):
 # ─────────────────────────────────────────────────────────────────────────────
 
 mode_label = {
-    'phase4': '🔬 Phase 4 — YOLO + Depth + MLP (with uncertainty)',
+    'phase4': '🔬 Phase 4+5 — YOLO + EfficientNet food type + Depth + MLP (with uncertainty)',
     'phase3': '📊 Phase 3 — ResNet-50 baseline',
     None:     '⚠ No model loaded',
 }
 
+clf_label = '🍕 Phase 5 food classifier active' if food_clf is not None else '⚠ No food classifier (run 05_food_classifier.ipynb to enable food-type detection)'
+
 with gr.Blocks(title='Nutrition5K Estimator') as demo:
     gr.Markdown(
         f'# 🥗 Nutrition5K — Dish Nutrition Estimator\n'
-        f'Upload a photo of a food dish to predict **calories, fat, protein, and carbohydrates**.\n\n'
-        f'**Active pipeline**: {mode_label.get(pipeline_mode, "unknown")}'
+        f'Upload **any real-world food photo** to get calories, fat, protein, and carbs.\n\n'
+        f'**Active pipeline**: {mode_label.get(pipeline_mode, "unknown")}  \n'
+        f'**Food recognition**: {clf_label}'
     )
     with gr.Row():
         img_input = gr.Image(type='pil', label='Upload Dish Image')
@@ -320,20 +434,21 @@ with gr.Blocks(title='Nutrition5K Estimator') as demo:
             text_out = gr.Markdown(label='Nutrition Prediction')
             json_out = gr.JSON(label='Raw values')
 
-    gr.Markdown('### 🥦 Detected Ingredients & Calorie Breakdown')
+    gr.Markdown('### 🍽 Detected Food Type & Calorie Breakdown')
     ingredient_table = gr.Dataframe(
-        headers=['Ingredient', 'Est. Calories (kcal)', 'Confidence'],
+        headers=['Detected Food / Ingredient', 'Est. Calories (kcal)', 'Confidence'],
         datatype=['str', 'str', 'str'],
-        label='YOLO-detected items (only COCO classes: bowl, apple, banana, sandwich, pizza, etc. — most Nutrition5K dishes show as unknown)',
+        label='Phase 5 food classifier (101 Food-101 classes) + YOLO segmentation',
         interactive=False,
     )
 
-    predict_btn = gr.Button('Predict', variant='primary')
+    predict_btn = gr.Button('Predict 🔍', variant='primary')
     predict_btn.click(fn=predict, inputs=img_input, outputs=[text_out, json_out, ingredient_table])
 
     gr.Markdown(
-        '> **Note**: Best results with overhead-style plated dish photos '
-        '(matching the Nutrition5K training distribution).'
+        '> **Tips**: Works best with a single dish centred in frame.  \n'
+        '> Food-101 covers pizza, sushi, ramen, burgers, salads, pasta, tacos, and 94 more categories.  \n'
+        '> For Asian & regional foods train on UECFOOD-256 or iFood-2019 (see notebook 05).'
     )
 
 if __name__ == '__main__':
