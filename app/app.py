@@ -95,6 +95,10 @@ _RESTAURANT_PORTIONS = {
     'salad': 250, 'caesar salad': 250, 'greek salad': 200,
     'nachos': 200, 'chicken wings': 250, 'spring rolls': 150,
     'dumplings': 200, 'bibimbap': 350, 'peking duck': 250,
+    # fruits (whole single piece)
+    'apple': 182, 'banana': 118, 'orange': 131, 'pear': 178,
+    'peach': 150, 'mango': 200, 'pineapple': 165, 'grape': 150,
+    'strawberry': 150, 'watermelon': 280, 'grapes': 150,
 }
 
 
@@ -699,6 +703,26 @@ def predict(image: Image.Image):
         food_type_preds = _classify_food_type(image, raw_mask, top_k=3)
         detected_food   = food_type_preds[0][0] if food_type_preds else None
         food_conf       = food_type_preds[0][1] if food_type_preds else None
+
+        # ── YOLO-name fallback for foods absent from Food-101 ─────────────────
+        # Food-101 has no plain fruit categories (apple, banana, orange, grape…).
+        # When EfficientNet confidence is low AND YOLO directly detected a known
+        # food class (especially fruits), prefer the YOLO label so USDA lookup
+        # can fire with the correct food name.
+        _YOLO_ONLY_FOODS = {
+            'banana', 'apple', 'orange', 'broccoli', 'carrot', 'hot dog',
+            'pizza', 'donut', 'cake', 'sandwich',
+        }
+        if (food_conf is None or food_conf < 0.15) and items:
+            # Pick the highest-confidence YOLO detection that matches a known food
+            _yolo_food = max(
+                (it for it in items if it['name'].lower() in _YOLO_ONLY_FOODS),
+                key=lambda x: x['conf'],
+                default=None,
+            )
+            if _yolo_food:
+                detected_food = _yolo_food['name']   # e.g. 'Banana', 'Apple'
+                food_conf     = _yolo_food['conf']   # YOLO detection confidence
 
         # ── Step 3 (Phase 6): predict weight → × food-specific constants ─────────
         p6_mean = p6_std = None
