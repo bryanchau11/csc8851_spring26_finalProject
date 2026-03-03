@@ -703,6 +703,7 @@ def predict(image: Image.Image):
         # ── Step 3 (Phase 6): predict weight → × food-specific constants ─────────
         p6_mean = p6_std = None
         w_mean  = None
+        w_std_mc = 0.0
         _weight_note = ''
         if weight_mlp_model is not None:
             weight_mlp_model.eval()
@@ -848,14 +849,17 @@ def predict(image: Image.Image):
         cal_idx  = next((i for i, c in enumerate(target_cols) if 'cal' in c.lower()), 0)
         total_cal = float(mean_pred[cal_idx])
 
+        # Format weight string for the table: "250 g" or "250±66 g"
+        _w_str = f'{w_mean:.0f}±{w_std_mc*2:.0f} g' if w_mean else '—'
+
         if detected_food:
             # Food classifier identified the dish — collapse all YOLO segments
             # into a single row for the whole dish.  Showing one row per YOLO
             # mask segment is misleading (they all say the same food name and
             # the per-segment calorie split has no nutritional meaning).
-            ingredient_rows = [[detected_food, f"{total_cal:.0f}", f"{food_conf*100:.0f}%"]]
+            ingredient_rows = [[detected_food, _w_str, f"{total_cal:.0f}", f"{food_conf*100:.0f}%"]]
             for alt_name, alt_conf in (food_type_preds[1:3] if food_type_preds else []):
-                ingredient_rows.append([f'  (alt) {alt_name}', '—', f"{alt_conf*100:.0f}%"])
+                ingredient_rows.append([f'  (alt) {alt_name}', '—', '—', f"{alt_conf*100:.0f}%"])
         elif items:
             # No food classification — show each YOLO segment with its own name
             total_area = sum(it['area'] for it in items) or 1.0
@@ -863,9 +867,9 @@ def predict(image: Image.Image):
             for it in items:
                 frac = it['area'] / total_area
                 conf_str = f"{it['conf']*100:.0f}%"
-                ingredient_rows.append([it['name'], f"{total_cal * frac:.0f}", conf_str])
+                ingredient_rows.append([it['name'], _w_str, f"{total_cal * frac:.0f}", conf_str])
         else:
-            ingredient_rows = [['Unknown dish', f"{total_cal:.0f}", '—']]
+            ingredient_rows = [['Unknown dish', _w_str, f"{total_cal:.0f}", '—']]
 
         result_json = {col: f'{mu:.1f} ± {sig*2:.1f}' for col, mu, sig in zip(target_cols, mean_pred, std_pred)}
         clf_note  = f'🍽 Detected food: **{detected_food}** ({food_conf*100:.0f}% confidence)\n\n' if detected_food else ''
@@ -880,7 +884,7 @@ def predict(image: Image.Image):
             mean_pred = p3_model(img_t).squeeze(0).cpu().numpy()
         result_json = {col: f'{v:.1f}' for col, v in zip(target_cols, mean_pred)}
         mode_note  = '_Pipeline: ResNet-50 direct regression (Phase 3 baseline)_'
-        ingredient_rows = [['N/A (ResNet baseline — no segmentation)', '—', '—']]
+        ingredient_rows = [['N/A (ResNet baseline — no segmentation)', '—', '—', '—']]
 
     label_txt = '\n'.join([f'{col}: {result_json[col]}' for col in target_cols])
     label_txt += f'\n\n{mode_note}\n> Units: kcal for calories, grams for macros'
@@ -920,8 +924,8 @@ with gr.Blocks(title='Nutrition5K Estimator') as demo:
 
     gr.Markdown('### 🍽 Detected Food Type & Calorie Breakdown')
     ingredient_table = gr.Dataframe(
-        headers=['Detected Food / Ingredient', 'Est. Calories (kcal)', 'Confidence'],
-        datatype=['str', 'str', 'str'],
+        headers=['Detected Food / Ingredient', 'Predicted Weight', 'Est. Calories (kcal)', 'Confidence'],
+        datatype=['str', 'str', 'str', 'str'],
         label='Phase 5 food classifier (101 Food-101 classes) + YOLO segmentation',
         interactive=False,
     )
