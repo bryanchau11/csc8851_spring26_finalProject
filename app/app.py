@@ -257,9 +257,14 @@ class FoodClassifier(nn.Module):
 # Load models at startup
 # ─────────────────────────────────────────────────────────────────────────────
 
-pipeline_mode = None   # 'phase6', 'phase4', or 'phase3'
+pipeline_mode = None   # 'full', 'phase6', 'phase4', or 'phase3'
+                       # 'full' = Phase 6 + Phase 4 + Phase 5 all running together
 mlp = weight_mlp_model = yolo_model = midas_model = midas_transform = None
+p3_model = None
+# Phase 6 feature normalisation stats
 feat_mean = feat_std = None
+# Phase 4 feature normalisation stats (separate — trained independently)
+p4_feat_mean = p4_feat_std = None
 nutrition_constants = {}   # Phase 6 calorie-density constants
 target_cols = ['calories', 'fat', 'protein', 'carbs']
 
@@ -267,81 +272,95 @@ target_cols = ['calories', 'fat', 'protein', 'carbs']
 food_clf        = None
 food_clf_labels = []   # list[str] index → class name
 
-# ── Try Phase 6 (weight-first approach) ──────────────────────────────────────
-if os.path.isfile(P6_CKPT) and os.path.isfile(P6_CONST) and os.path.isfile(P6_STATS):
-    try:
-        from ultralytics import YOLO as _YOLO
-        yolo_model = _YOLO('yolov8n-seg.pt')
-        FOOD_CLASSES.update(_build_food_classes(yolo_model))
-        print(f'✓ YOLO food classes: {[yolo_model.names[i] for i in sorted(FOOD_CLASSES)]}')
+# ── Load YOLO + MiDaS (shared by Phase 4 and 6) ──────────────────────────────
+_geo_models_loaded = False
+try:
+    from ultralytics import YOLO as _YOLO
+    yolo_model = _YOLO('yolov8n-seg.pt')
+    FOOD_CLASSES.update(_build_food_classes(yolo_model))
+    midas_model = torch.hub.load('intel-isl/MiDaS', 'MiDaS_small', trust_repo=True)
+    midas_model.to(device).eval()
+    _t = torch.hub.load('intel-isl/MiDaS', 'transforms', trust_repo=True)
+    midas_transform = _t.small_transform
+    _geo_models_loaded = True
+    print(f'✓ YOLO + MiDaS loaded')
+except Exception as _e:
+    print(f'⚠ YOLO/MiDaS load failed ({_e})')
 
+# ── Load Phase 6 (weight-first) ───────────────────────────────────────────────
+_p6_loaded = False
+if _geo_models_loaded and os.path.isfile(P6_CKPT) and os.path.isfile(P6_CONST) and os.path.isfile(P6_STATS):
+    try:
         stats = np.load(P6_STATS, allow_pickle=True)
         feat_mean = stats['feat_mean'].astype(np.float32)
         feat_std  = stats['feat_std'].astype(np.float32)
 
         with open(P6_CONST) as _f:
             nutrition_constants = json.load(_f)
-        # Derive target_cols order from constant keys (strip _per_g)
         target_cols = [k.replace('_per_g', '') for k in nutrition_constants]
 
         ckpt = torch.load(P6_CKPT, map_location=device, weights_only=False)
         weight_mlp_model = WeightMLP(in_feats=9).to(device)
         weight_mlp_model.load_state_dict(ckpt['model_state_dict'])
         weight_mlp_model.eval()
-
-        midas_model = torch.hub.load('intel-isl/MiDaS', 'MiDaS_small', trust_repo=True)
-        midas_model.to(device).eval()
-        _t = torch.hub.load('intel-isl/MiDaS', 'transforms', trust_repo=True)
-        midas_transform = _t.small_transform
-
-        pipeline_mode = 'phase6'
-        print(f'✓ Phase 6 pipeline loaded  (weight-first, targets: {target_cols})')
+        _p6_loaded = True
+        print(f'✓ Phase 6 loaded  (weight-first, targets: {target_cols})')
         print(f'  Constants: { {k: round(v,4) for k,v in nutrition_constants.items()} }')
     except Exception as e:
-        print(f'⚠ Phase 6 load failed ({e}) — trying Phase 4 fallback')
+        print(f'⚠ Phase 6 load failed ({e})')
 
-# ── Try Phase 4 ───────────────────────────────────────────────────────────────
-if pipeline_mode is None and os.path.isfile(P4_CKPT) and os.path.isfile(P4_STATS):
+# ── Load Phase 4 (direct regression) — runs alongside Phase 6 ─────────────────
+_p4_loaded = False
+if _geo_models_loaded and os.path.isfile(P4_CKPT) and os.path.isfile(P4_STATS):
     try:
-        from ultralytics import YOLO as _YOLO
-        yolo_model = _YOLO('yolov8n-seg.pt')
-        FOOD_CLASSES.update(_build_food_classes(yolo_model))
-        print(f'✓ YOLO food classes: {[yolo_model.names[i] for i in sorted(FOOD_CLASSES)]}')
+        _p4_stats = np.load(P4_STATS, allow_pickle=True)
+        p4_feat_mean = _p4_stats['feat_mean'].astype(np.float32)
+        p4_feat_std  = _p4_stats['feat_std'].astype(np.float32)
 
-        stats = np.load(P4_STATS, allow_pickle=True)
-        feat_mean   = stats['feat_mean'].astype(np.float32)
-        feat_std    = stats['feat_std'].astype(np.float32)
-        target_cols = list(stats['target_cols'])
-
-        ckpt = torch.load(P4_CKPT, map_location=device, weights_only=False)
-        target_cols = ckpt.get('target_cols', target_cols)
-        mlp = NutritionMLP(in_feats=9, num_targets=len(target_cols)).to(device)
-        mlp.load_state_dict(ckpt['model_state_dict'])
-
-        # Lazy MiDaS
-        midas_model = torch.hub.load('intel-isl/MiDaS', 'MiDaS_small', trust_repo=True)
-        midas_model.to(device).eval()
-        _t = torch.hub.load('intel-isl/MiDaS', 'transforms', trust_repo=True)
-        midas_transform = _t.small_transform
-
-        pipeline_mode = 'phase4'
-        print(f'✓ Phase 4 pipeline loaded  (targets: {target_cols})')
+        _p4_ckpt = torch.load(P4_CKPT, map_location=device, weights_only=False)
+        _p4_tcols = list(_p4_ckpt.get('target_cols',
+                         _p4_stats.get('target_cols', target_cols)))
+        mlp = NutritionMLP(in_feats=9, num_targets=len(_p4_tcols)).to(device)
+        mlp.load_state_dict(_p4_ckpt['model_state_dict'])
+        mlp.eval()
+        # Align Phase 4 target cols to Phase 6 order if both loaded
+        if not _p6_loaded:
+            target_cols = _p4_tcols
+        _p4_loaded = True
+        print(f'✓ Phase 4 loaded  (direct regression, targets: {_p4_tcols})')
     except Exception as e:
-        print(f'⚠ Phase 4 load failed ({e}) — trying Phase 3 fallback')
+        print(f'⚠ Phase 4 load failed ({e})')
 
-# ── Try Phase 3 fallback ─────────────────────────────────────────────────────
-if pipeline_mode is None:
-    if os.path.isfile(P3_CKPT):
-        ckpt = torch.load(P3_CKPT, map_location=device, weights_only=False)
-        target_cols = ckpt.get('target_cols', target_cols)
-        p3_model = NutritionEstimator(num_targets=len(target_cols)).to(device)
-        p3_model.load_state_dict(ckpt['model_state_dict'])
+# Set pipeline mode based on what loaded
+if _p6_loaded and _p4_loaded:
+    pipeline_mode = 'full'    # All phases running — best mode
+elif _p6_loaded:
+    pipeline_mode = 'phase6'
+elif _p4_loaded:
+    pipeline_mode = 'phase4'
+
+if pipeline_mode in ('full', 'phase6', 'phase4'):
+    # Use Phase 6 normalisation stats if available, else Phase 4
+    if feat_mean is None and p4_feat_mean is not None:
+        feat_mean, feat_std = p4_feat_mean, p4_feat_std
+
+# ── Load Phase 3 (ResNet baseline) — always attempt, used as fallback or comparison ──
+if os.path.isfile(P3_CKPT):
+    try:
+        _p3_ckpt = torch.load(P3_CKPT, map_location=device, weights_only=False)
+        _p3_tcols = _p3_ckpt.get('target_cols', target_cols)
+        p3_model = NutritionEstimator(num_targets=len(_p3_tcols)).to(device)
+        p3_model.load_state_dict(_p3_ckpt['model_state_dict'])
         p3_model.eval()
-        pipeline_mode = 'phase3'
-        print(f'✓ Phase 3 ResNet model loaded  (targets: {target_cols})')
-    else:
-        print('⚠ No checkpoint found. Place best_mlp.pt + mlp_feat_stats.npz '
-              '(or best_model.pt) in models/')
+        if pipeline_mode is None:
+            pipeline_mode = 'phase3'
+            target_cols = _p3_tcols
+        print(f'✓ Phase 3 ResNet loaded  (baseline, targets: {_p3_tcols})')
+    except Exception as _e:
+        print(f'⚠ Phase 3 load failed ({_e})')
+
+if pipeline_mode is None:
+    print('⚠ No checkpoint found. Place model files in models/')
 
 # ── Try Phase 5 food classifier (optional — runs alongside Phase 4) ───────────
 if os.path.isfile(FOOD_CLF_CKPT):
@@ -517,126 +536,145 @@ def predict(image: Image.Image):
         return ('No model checkpoint found. Download best_mlp.pt + mlp_feat_stats.npz '
                 'from Kaggle output and place them in models/.'), None, []
 
-    if pipeline_mode in ('phase6', 'phase4'):
-        feat, items, raw_mask = _extract_features(image)
-        x    = torch.tensor(feat).unsqueeze(0).to(device)
-
-        if pipeline_mode == 'phase6':
-            # ── Phase 6: predict weight → multiply by constants ────────────────
-            weight_mlp_model.eval()
-            for m in weight_mlp_model.modules():
-                if isinstance(m, nn.Dropout): m.train()
-            torch.manual_seed(42)
-            weight_samples = []
-            with torch.no_grad():
-                for _ in range(MC_SAMPLES):
-                    weight_samples.append(weight_mlp_model(x).item())
-            weight_mlp_model.eval()
-
-            w_raw  = float(np.mean(weight_samples))
-            w_std  = float(np.std(weight_samples))
-
-            # Fallback: if model is very uncertain (domain shift from real photos),
-            # use the Nutrition5K mean dish weight (~280g) instead of a near-zero prediction
-            DATASET_MEAN_WEIGHT = 280.0   # kcal-weighted mean across Nutrition5K
-            MIN_WEIGHT          = 50.0    # absolute floor — no recognisable dish is <50g
-            _used_fallback = w_raw < MIN_WEIGHT or (w_std > abs(w_raw) and w_raw < DATASET_MEAN_WEIGHT)
-            if _used_fallback:
-                w_mean = DATASET_MEAN_WEIGHT
-            else:
-                w_mean = max(w_raw, MIN_WEIGHT)
-
-            # Apply dataset constants: nutrition = weight × constant
-            # If fallback weight is used AND Phase 5 detected a food type, scale
-            # constants by the food-specific calorie density so different foods
-            # give different results instead of the same global-mean prediction.
-            const_keys = list(nutrition_constants.keys())  # e.g. calories_per_g, ...
-            active_constants = dict(nutrition_constants)   # start with global defaults
-            _food_scale_note = ''
-            if _used_fallback:
-                # Run Phase 5 classifier early to get food type for scaling.
-                # raw_mask is already computed by _extract_features above.
-                _early_preds = _classify_food_type(image, raw_mask, top_k=1)
-                _detected_early = _early_preds[0][0] if _early_preds else None
-                _conf_early     = _early_preds[0][1] if _early_preds else 0.0
-                if _detected_early and _conf_early >= 0.40:
-                    _fkey = _food_name_to_key(_detected_early)
-                    _food_kcal_g = FOOD_KCAL_PER_G.get(_fkey)
-                    if _food_kcal_g is None:
-                        # Try partial match (e.g. 'carbonara' matches 'spaghetti_carbonara')
-                        _parts = _fkey.split('_')
-                        for k in FOOD_KCAL_PER_G:
-                            if any(p in k for p in _parts if len(p) > 4):
-                                _food_kcal_g = FOOD_KCAL_PER_G[k]; break
-                    if _food_kcal_g:
-                        _global_cal_g = nutrition_constants.get(
-                            next(k for k in const_keys if 'cal' in k))
-                        _scale = _food_kcal_g / _global_cal_g
-                        active_constants = {k: v * _scale for k, v in nutrition_constants.items()}
-                        _food_scale_note = f' × {_detected_early} density ({_food_kcal_g:.2f} kcal/g)'
-
-            mean_pred = np.array([w_mean * active_constants[k] for k in const_keys],
-                                 dtype=np.float32)
-            std_pred  = np.array([w_std  * active_constants[k] for k in const_keys],
-                                 dtype=np.float32)
-            # target_cols was set from const keys at load time
-            _fallback_note = f' — low-confidence, used dataset mean{_food_scale_note}' if _used_fallback else ''
-            mode_extra = f'\n_Predicted weight: **{w_mean:.0f} ± {w_std*2:.0f}g** (MC Dropout, 30 samples{_fallback_note})_'
+    if pipeline_mode in ('full', 'phase6', 'phase4'):
+        # ── Step 1 (Phase 4/6 shared): YOLO mask + MiDaS depth → 9 features ──────
+        feat_raw, items, raw_mask = _extract_features(image)
+        # raw feat_raw is already normalised by Phase 6 stats;
+        # for Phase 4 we need its own normalisation
+        x6 = torch.tensor(feat_raw, dtype=torch.float32).unsqueeze(0).to(device)
+        # Phase 4 feature vector (re-normalised with p4 stats if available)
+        if p4_feat_mean is not None:
+            _raw_unnorm = feat_raw * feat_std.flatten() + feat_mean.flatten()
+            _p4_norm    = (_raw_unnorm - p4_feat_mean.flatten()) / p4_feat_std.flatten()
+            x4 = torch.tensor(_p4_norm, dtype=torch.float32).unsqueeze(0).to(device)
         else:
-            # ── Phase 4: direct regression ─────────────────────────────────────
-            mlp.eval()
-            for m in mlp.modules():
-                if isinstance(m, nn.Dropout): m.train()
-            torch.manual_seed(42)
-            preds_mc = []
-            with torch.no_grad():
-                for _ in range(MC_SAMPLES):
-                    preds_mc.append(mlp(x).squeeze(0).cpu().numpy())
-            mlp.eval()
-            preds_mc = np.stack(preds_mc)
-            mean_pred = preds_mc.mean(0)
-            std_pred  = preds_mc.std(0)
-            mode_extra = ''
+            x4 = x6
 
-        # Find calories index for per-item breakdown
-        cal_idx = next((i for i, c in enumerate(target_cols) if 'cal' in c.lower()), 0)
-        total_cal = float(mean_pred[cal_idx])
-
-        # Phase 5: classify food type from the image crop
+        # ── Step 2 (Phase 5): classify food type ─────────────────────────────────
         food_type_preds = _classify_food_type(image, raw_mask, top_k=3)
         detected_food   = food_type_preds[0][0] if food_type_preds else None
         food_conf       = food_type_preds[0][1] if food_type_preds else None
 
-        # Build ingredient table (proportional calorie split by mask area)
+        # ── Step 3 (Phase 6): predict weight → × food-specific constants ─────────
+        p6_mean = p6_std = None
+        w_mean  = None
+        _weight_note = ''
+        if weight_mlp_model is not None:
+            weight_mlp_model.eval()
+            for m in weight_mlp_model.modules():
+                if isinstance(m, nn.Dropout): m.train()
+            torch.manual_seed(42)
+            _w_samples = []
+            with torch.no_grad():
+                for _ in range(MC_SAMPLES):
+                    _w_samples.append(weight_mlp_model(x6).item())
+            weight_mlp_model.eval()
+            w_raw = float(np.mean(_w_samples));  w_std_mc = float(np.std(_w_samples))
+
+            DATASET_MEAN_WEIGHT = 280.0
+            MIN_WEIGHT          = 50.0
+            _used_fallback = w_raw < MIN_WEIGHT or (w_std_mc > abs(w_raw) and w_raw < DATASET_MEAN_WEIGHT)
+            w_mean = DATASET_MEAN_WEIGHT if _used_fallback else max(w_raw, MIN_WEIGHT)
+
+            # Scale constants by food-specific density when Phase 5 is confident
+            const_keys     = list(nutrition_constants.keys())
+            active_constants = dict(nutrition_constants)
+            _food_scale_note = ''
+            if detected_food and food_conf and food_conf >= 0.40:
+                _fkey = _food_name_to_key(detected_food)
+                _food_kcal_g = FOOD_KCAL_PER_G.get(_fkey)
+                if _food_kcal_g is None:
+                    for k in FOOD_KCAL_PER_G:
+                        if any(p in k for p in _fkey.split('_') if len(p) > 4):
+                            _food_kcal_g = FOOD_KCAL_PER_G[k]; break
+                if _food_kcal_g:
+                    _cal_key     = next(k for k in const_keys if 'cal' in k)
+                    _scale       = _food_kcal_g / nutrition_constants[_cal_key]
+                    active_constants = {k: v * _scale for k, v in nutrition_constants.items()}
+                    _food_scale_note = f' ({_food_kcal_g:.2f} kcal/g)'
+
+            p6_mean = np.array([w_mean * active_constants[k] for k in const_keys], dtype=np.float32)
+            p6_std  = np.array([w_std_mc * active_constants[k] for k in const_keys], dtype=np.float32)
+            _fb_note = ' — fallback weight' if _used_fallback else ''
+            _weight_note = f'**{w_mean:.0f}±{w_std_mc*2:.0f}g**{_fb_note}{_food_scale_note}'
+
+        # ── Step 4 (Phase 4): direct regression via MLP ───────────────────────────
+        p4_mean = p4_std = None
+        if mlp is not None:
+            mlp.eval()
+            for m in mlp.modules():
+                if isinstance(m, nn.Dropout): m.train()
+            torch.manual_seed(42)
+            _p4_mc = []
+            with torch.no_grad():
+                for _ in range(MC_SAMPLES):
+                    _p4_mc.append(mlp(x4).squeeze(0).cpu().numpy())
+            mlp.eval()
+            _p4_mc = np.stack(_p4_mc)
+            p4_mean = _p4_mc.mean(0)
+            p4_std  = _p4_mc.std(0)
+
+        # ── Step 5: Ensemble Phase 4 + Phase 6 (inverse-variance weighting) ───────
+        if p6_mean is not None and p4_mean is not None:
+            # Weight each phase by 1/variance — more certain model gets more weight
+            p6_var = np.clip(p6_std ** 2, 1e-6, None)
+            p4_var = np.clip(p4_std ** 2, 1e-6, None)
+            w6 = 1.0 / p6_var
+            w4 = 1.0 / p4_var
+            w_total  = w6 + w4
+            mean_pred = (w6 * p6_mean + w4 * p4_mean) / w_total
+            # Combined uncertainty (propagated)
+            std_pred  = np.sqrt(1.0 / w_total)
+            # Compute per-macro weights for display (average across macros)
+            _alpha6 = float((w6 / w_total).mean())
+            _alpha4 = 1.0 - _alpha6
+            ensemble_note = (f'\n_Ensemble: Phase 6 weight {_alpha6*100:.0f}% · '
+                             f'Phase 4 {_alpha4*100:.0f}% (inverse-variance)_'
+                             f'\n_Phase 6 weight prediction: {_weight_note}_')
+        elif p6_mean is not None:
+            mean_pred, std_pred = p6_mean, p6_std
+            ensemble_note = f'\n_Phase 6 only (Phase 4 not loaded) · Weight: {_weight_note}_'
+        else:
+            mean_pred, std_pred = p4_mean, p4_std
+            ensemble_note = '\n_Phase 4 only (Phase 6 not loaded)_'
+
+        # ── Step 6 (Phase 3): ResNet baseline comparison ──────────────────────────
+        p3_note = ''
+        if p3_model is not None:
+            _img_t = val_transform(image.convert('RGB')).unsqueeze(0).to(device)
+            with torch.no_grad():
+                _p3_pred = p3_model(_img_t).squeeze(0).cpu().numpy()
+            cal_idx3 = next((i for i, c in enumerate(target_cols) if 'cal' in c.lower()), 0)
+            p3_note  = f'\n_Phase 3 baseline (ResNet-50): {_p3_pred[cal_idx3]:.0f} kcal_'
+
+        # ── Build outputs ─────────────────────────────────────────────────────────
+        cal_idx  = next((i for i, c in enumerate(target_cols) if 'cal' in c.lower()), 0)
+        total_cal = float(mean_pred[cal_idx])
+
         if items:
             total_area = sum(it['area'] for it in items) or 1.0
             ingredient_rows = []
             for it in items:
                 frac = it['area'] / total_area
-                item_cal = total_cal * frac
-                # Override YOLO class name with food classifier result if available
                 display_name = detected_food if detected_food else it['name']
                 conf_str     = f"{food_conf*100:.0f}%" if food_conf else f"{it['conf']*100:.0f}%"
-                ingredient_rows.append([display_name, f"{item_cal:.0f}", conf_str])
+                ingredient_rows.append([display_name, f"{total_cal * frac:.0f}", conf_str])
         else:
             if detected_food:
                 ingredient_rows = [[detected_food, f"{total_cal:.0f}", f"{food_conf*100:.0f}%"]]
-                # Show top-3 alternatives in extra rows
                 for alt_name, alt_conf in food_type_preds[1:]:
                     ingredient_rows.append([f'  (alt) {alt_name}', '—', f"{alt_conf*100:.0f}%"])
             else:
-                ingredient_rows = [['Unknown dish (YOLO-COCO has no matching class)', f"{total_cal:.0f}", '—']]
+                ingredient_rows = [['Unknown dish', f"{total_cal:.0f}", '—']]
 
         result_json = {col: f'{mu:.1f} ± {sig*2:.1f}' for col, mu, sig in zip(target_cols, mean_pred, std_pred)}
         clf_note  = f'🍽 Detected food: **{detected_food}** ({food_conf*100:.0f}% confidence)\n\n' if detected_food else ''
-        if pipeline_mode == 'phase6':
-            mode_note = (f'{clf_note}'
-                         f'_Pipeline: Phase 6 — YOLOv8-seg + MiDaS depth → WeightMLP → nutrition × constants_'
-                         f'{mode_extra}')
-        else:
-            mode_note = f'{clf_note}_Pipeline: YOLOv8-seg → EfficientNet-B0 food type → MiDaS depth → MLP + MC Dropout_'
+        mode_note = (f'{clf_note}'
+                     f'_Pipeline: Phase 6 — YOLOv8-seg + MiDaS → WeightMLP · '
+                     f'Phase 4 — YOLO+MiDaS → MLP · Phase 5 — EfficientNet-B0_'
+                     f'{ensemble_note}{p3_note}')
 
-    else:  # phase3
+    else:  # phase3 only
         img_t = val_transform(image.convert('RGB')).unsqueeze(0).to(device)
         with torch.no_grad():
             mean_pred = p3_model(img_t).squeeze(0).cpu().numpy()
@@ -654,6 +692,7 @@ def predict(image: Image.Image):
 # ─────────────────────────────────────────────────────────────────────────────
 
 mode_label = {
+    'full':   '🚀 Full Pipeline — Phase 3+4+5+6 all active (ensemble Phase4+6, food type from Phase5, ResNet3 baseline)',
     'phase6': '🎯 Phase 6 — Weight-First: YOLO + MiDaS → WeightMLP → × dataset constants (professor spec)',
     'phase4': '🔬 Phase 4+5 — YOLO + EfficientNet food type + Depth + MLP direct regression',
     'phase3': '📊 Phase 3 — ResNet-50 baseline',
