@@ -202,22 +202,47 @@ def _lookup_usda(food_name: str):
     # Plausible range for a plated restaurant dish (not a pure sauce or raw oil)
     KCAL_MIN, KCAL_MAX = 0.5, 4.5
 
+    def _median_candidate(candidates):
+        """Return the median-kcal/g candidate from a list — avoids extremes."""
+        candidates.sort(key=lambda t: t[0])
+        return candidates[len(candidates) // 2]
+
     try:
-        all_candidates = []
-        for q in queries_to_try:
-            try:
-                for food in _fetch_foods(q):
-                    parsed = _parse_food(food)
-                    if KCAL_MIN <= parsed[0] <= KCAL_MAX:
-                        all_candidates.append(parsed)
-            except Exception:
-                continue   # one query failing should not abort the loop
+        # ── Step 1: Try the full dish name first ──────────────────────────────
+        # If it gives plausible results, use the MEDIAN of those (not max).
+        # Taking the median avoids both the diluted low-calorie survey variants
+        # AND accidentally grabbing a condiment/sauce entry that skews high.
+        full_name_candidates = []
+        try:
+            for food in _fetch_foods(queries_to_try[0]):
+                parsed = _parse_food(food)
+                if KCAL_MIN <= parsed[0] <= KCAL_MAX:
+                    full_name_candidates.append(parsed)
+        except Exception:
+            pass
 
-        if not all_candidates:
-            return None
+        if full_name_candidates:
+            # Full dish name returned plausible entries — use median
+            best = _median_candidate(full_name_candidates)
+        else:
+            # ── Step 2: Full name failed → try individual keywords ────────────
+            # e.g. "spaghetti carbonara" → "carbonara" → hits branded pasta meals
+            # In this fallback we take the HIGHEST result because keywords are
+            # less specific and more likely to match ingredient-only items.
+            kw_candidates = []
+            for q in queries_to_try[1:]:
+                try:
+                    for food in _fetch_foods(q):
+                        parsed = _parse_food(food)
+                        if KCAL_MIN <= parsed[0] <= KCAL_MAX:
+                            kw_candidates.append(parsed)
+                except Exception:
+                    continue
+            if not kw_candidates:
+                return None
+            best = max(kw_candidates, key=lambda t: t[0])
 
-        # Best = highest Atwater kcal/g among all queries and data types
-        kcal_g, fat_g, prot_g, carb_g, srv = max(all_candidates, key=lambda t: t[0])
+        kcal_g, fat_g, prot_g, carb_g, srv = best
 
         # Serving size: use USDA value only if it looks like a real meal portion;
         # otherwise ask _restaurant_serving_g for a sensible default.
@@ -228,7 +253,8 @@ def _lookup_usda(food_name: str):
         _usda_cache[cache_key] = entry
         _save_usda_cache()
         print(f'  USDA "{cache_key}": {kcal_g:.2f} kcal/g  '
-              f'F={fat_g:.3f}  P={prot_g:.3f}  C={carb_g:.3f}  srv={srv:.0f}g')
+              f'F={fat_g:.3f}  P={prot_g:.3f}  C={carb_g:.3f}  srv={srv:.0f}g'
+              f'  (full-name:{len(full_name_candidates)} hits)')
         return entry
 
     except Exception as _e:
@@ -822,21 +848,24 @@ def predict(image: Image.Image):
         cal_idx  = next((i for i, c in enumerate(target_cols) if 'cal' in c.lower()), 0)
         total_cal = float(mean_pred[cal_idx])
 
-        if items:
+        if detected_food:
+            # Food classifier identified the dish — collapse all YOLO segments
+            # into a single row for the whole dish.  Showing one row per YOLO
+            # mask segment is misleading (they all say the same food name and
+            # the per-segment calorie split has no nutritional meaning).
+            ingredient_rows = [[detected_food, f"{total_cal:.0f}", f"{food_conf*100:.0f}%"]]
+            for alt_name, alt_conf in (food_type_preds[1:3] if food_type_preds else []):
+                ingredient_rows.append([f'  (alt) {alt_name}', '—', f"{alt_conf*100:.0f}%"])
+        elif items:
+            # No food classification — show each YOLO segment with its own name
             total_area = sum(it['area'] for it in items) or 1.0
             ingredient_rows = []
             for it in items:
                 frac = it['area'] / total_area
-                display_name = detected_food if detected_food else it['name']
-                conf_str     = f"{food_conf*100:.0f}%" if food_conf else f"{it['conf']*100:.0f}%"
-                ingredient_rows.append([display_name, f"{total_cal * frac:.0f}", conf_str])
+                conf_str = f"{it['conf']*100:.0f}%"
+                ingredient_rows.append([it['name'], f"{total_cal * frac:.0f}", conf_str])
         else:
-            if detected_food:
-                ingredient_rows = [[detected_food, f"{total_cal:.0f}", f"{food_conf*100:.0f}%"]]
-                for alt_name, alt_conf in food_type_preds[1:]:
-                    ingredient_rows.append([f'  (alt) {alt_name}', '—', f"{alt_conf*100:.0f}%"])
-            else:
-                ingredient_rows = [['Unknown dish', f"{total_cal:.0f}", '—']]
+            ingredient_rows = [['Unknown dish', f"{total_cal:.0f}", '—']]
 
         result_json = {col: f'{mu:.1f} ± {sig*2:.1f}' for col, mu, sig in zip(target_cols, mean_pred, std_pred)}
         clf_note  = f'🍽 Detected food: **{detected_food}** ({food_conf*100:.0f}% confidence)\n\n' if detected_food else ''
