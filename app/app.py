@@ -62,6 +62,118 @@ _FOOD_KEYWORDS = {
 }
 _NON_FOOD = {'dining table', 'fork', 'knife', 'spoon', 'chopsticks'}
 
+# ── Per-category calorie density (kcal/g) for Food-101 classes ────────────────
+# Used to differentiate fallback predictions when WeightMLP confidence is low.
+# Values are approximate means from USDA/FDA nutritional data.
+FOOD_KCAL_PER_G = {
+    'apple_pie':          2.37,
+    'baby_back_ribs':     2.90,
+    'baklava':            4.28,
+    'beef_carpaccio':     1.62,
+    'beef_tartare':       1.62,
+    'beet_salad':         0.49,
+    'beignets':           3.50,
+    'bibimbap':           1.30,
+    'bread_pudding':      1.85,
+    'breakfast_burrito':  1.95,
+    'bruschetta':         1.75,
+    'caesar_salad':       0.75,
+    'cannoli':            3.42,
+    'caprese_salad':      0.96,
+    'carrot_cake':        3.15,
+    'ceviche':            0.68,
+    'cheese_plate':       3.50,
+    'cheesecake':         3.21,
+    'chicken_curry':      1.50,
+    'chicken_quesadilla': 2.24,
+    'chicken_wings':      2.66,
+    'chocolate_cake':     3.71,
+    'chocolate_mousse':   2.10,
+    'churros':            3.73,
+    'clam_chowder':       0.72,
+    'club_sandwich':      2.30,
+    'crab_cakes':         1.65,
+    'creme_brulee':       1.74,
+    'croque_madame':      2.40,
+    'cup_cakes':          3.51,
+    'deviled_eggs':       1.58,
+    'donuts':             3.89,
+    'dumplings':          1.66,
+    'edamame':            1.21,
+    'eggs_benedict':      1.94,
+    'escargots':          1.32,
+    'falafel':            3.33,
+    'filet_mignon':       2.71,
+    'fish_and_chips':     2.50,
+    'foie_gras':          4.62,
+    'french_fries':       3.12,
+    'french_onion_soup':  0.57,
+    'french_toast':       1.54,
+    'fried_calamari':     1.75,
+    'fried_rice':         1.63,
+    'frozen_yogurt':      1.27,
+    'garlic_bread':       3.27,
+    'gnocchi':            1.31,
+    'greek_salad':        0.74,
+    'grilled_cheese_sandwich': 3.10,
+    'grilled_salmon':     1.45,
+    'guacamole':          1.60,
+    'gyoza':              1.66,
+    'hamburger':          2.95,
+    'hot_and_sour_soup':  0.45,
+    'hot_dog':            2.90,
+    'huevos_rancheros':   1.45,
+    'hummus':             1.77,
+    'ice_cream':          2.07,
+    'lasagna':            1.35,
+    'lobster_bisque':     1.20,
+    'lobster_roll_sandwich': 2.45,
+    'macaroni_and_cheese': 1.64,
+    'macarons':           4.04,
+    'miso_soup':          0.40,
+    'mussels':            0.86,
+    'nachos':             3.06,
+    'omelette':           1.54,
+    'onion_rings':        3.11,
+    'oysters':            0.81,
+    'pad_thai':           1.85,
+    'paella':             1.60,
+    'pancakes':           2.27,
+    'panna_cotta':        1.60,
+    'peking_duck':        3.37,
+    'pho':                0.65,
+    'pizza':              2.66,
+    'pork_chop':          2.50,
+    'poutine':            1.68,
+    'prime_rib':          3.22,
+    'pulled_pork_sandwich': 2.70,
+    'ramen':              1.36,
+    'ravioli':            1.50,
+    'red_velvet_cake':    3.52,
+    'risotto':            1.42,
+    'samosa':             2.62,
+    'sashimi':            1.27,
+    'scallops':           0.88,
+    'seaweed_salad':      0.45,
+    'shrimp_and_grits':   1.65,
+    'spaghetti_bolognese': 1.80,
+    'spaghetti_carbonara': 2.07,
+    'spring_rolls':       1.80,
+    'steak':              2.50,
+    'strawberry_shortcake': 2.49,
+    'sushi':              1.43,
+    'tacos':              2.18,
+    'takoyaki':           1.85,
+    'tiramisu':           2.84,
+    'tuna_tartare':       1.08,
+    'waffles':            2.91,
+}
+
+def _food_name_to_key(name: str) -> str:
+    """Normalise a food classifier label to a FOOD_KCAL_PER_G key."""
+    return name.lower().replace(' ', '_').replace('-', '_').replace('/', '_')
+
+
 def _build_food_classes(yolo):
     """Return set of class IDs whose names match food keywords."""
     food_ids = set()
@@ -317,7 +429,10 @@ def _classify_food_type(pil_img: Image.Image, mask: np.ndarray, top_k: int = 3):
     # ── Crop bounding box of the mask region ─────────────────────────────────
     H_img, W_img = np.array(pil_img.convert('RGB')).shape[:2]
     # Resize mask to match original image dimensions (mask may be 224×224)
-    mask_full = cv2.resize(mask, (W_img, H_img))
+    if mask is not None:
+        mask_full = cv2.resize(mask, (W_img, H_img))
+    else:
+        mask_full = np.zeros((H_img, W_img), dtype=np.float32)  # no mask → use full image
     ys, xs    = np.where(mask_full > 0.5)
     if len(ys) > 0:
         y0, y1 = int(ys.min()), int(ys.max())
@@ -432,13 +547,40 @@ def predict(image: Image.Image):
                 w_mean = max(w_raw, MIN_WEIGHT)
 
             # Apply dataset constants: nutrition = weight × constant
+            # If fallback weight is used AND Phase 5 detected a food type, scale
+            # constants by the food-specific calorie density so different foods
+            # give different results instead of the same global-mean prediction.
             const_keys = list(nutrition_constants.keys())  # e.g. calories_per_g, ...
-            mean_pred = np.array([w_mean * nutrition_constants[k] for k in const_keys],
+            active_constants = dict(nutrition_constants)   # start with global defaults
+            _food_scale_note = ''
+            if _used_fallback:
+                # Run Phase 5 classifier early to get food type for scaling.
+                # raw_mask is already computed by _extract_features above.
+                _early_preds = _classify_food_type(image, raw_mask, top_k=1)
+                _detected_early = _early_preds[0][0] if _early_preds else None
+                _conf_early     = _early_preds[0][1] if _early_preds else 0.0
+                if _detected_early and _conf_early >= 0.40:
+                    _fkey = _food_name_to_key(_detected_early)
+                    _food_kcal_g = FOOD_KCAL_PER_G.get(_fkey)
+                    if _food_kcal_g is None:
+                        # Try partial match (e.g. 'carbonara' matches 'spaghetti_carbonara')
+                        _parts = _fkey.split('_')
+                        for k in FOOD_KCAL_PER_G:
+                            if any(p in k for p in _parts if len(p) > 4):
+                                _food_kcal_g = FOOD_KCAL_PER_G[k]; break
+                    if _food_kcal_g:
+                        _global_cal_g = nutrition_constants.get(
+                            next(k for k in const_keys if 'cal' in k))
+                        _scale = _food_kcal_g / _global_cal_g
+                        active_constants = {k: v * _scale for k, v in nutrition_constants.items()}
+                        _food_scale_note = f' × {_detected_early} density ({_food_kcal_g:.2f} kcal/g)'
+
+            mean_pred = np.array([w_mean * active_constants[k] for k in const_keys],
                                  dtype=np.float32)
-            std_pred  = np.array([w_std  * nutrition_constants[k] for k in const_keys],
+            std_pred  = np.array([w_std  * active_constants[k] for k in const_keys],
                                  dtype=np.float32)
             # target_cols was set from const keys at load time
-            _fallback_note = ' — low-confidence, used dataset mean' if _used_fallback else ''
+            _fallback_note = f' — low-confidence, used dataset mean{_food_scale_note}' if _used_fallback else ''
             mode_extra = f'\n_Predicted weight: **{w_mean:.0f} ± {w_std*2:.0f}g** (MC Dropout, 30 samples{_fallback_note})_'
         else:
             # ── Phase 4: direct regression ─────────────────────────────────────
