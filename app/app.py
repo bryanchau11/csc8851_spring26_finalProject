@@ -62,112 +62,118 @@ _FOOD_KEYWORDS = {
 }
 _NON_FOOD = {'dining table', 'fork', 'knife', 'spoon', 'chopsticks'}
 
-# ── Per-category calorie density (kcal/g) for Food-101 classes ────────────────
-# Used to differentiate fallback predictions when WeightMLP confidence is low.
-# Values are approximate means from USDA/FDA nutritional data.
-FOOD_KCAL_PER_G = {
-    'apple_pie':          2.37,
-    'baby_back_ribs':     2.90,
-    'baklava':            4.28,
-    'beef_carpaccio':     1.62,
-    'beef_tartare':       1.62,
-    'beet_salad':         0.49,
-    'beignets':           3.50,
-    'bibimbap':           1.30,
-    'bread_pudding':      1.85,
-    'breakfast_burrito':  1.95,
-    'bruschetta':         1.75,
-    'caesar_salad':       0.75,
-    'cannoli':            3.42,
-    'caprese_salad':      0.96,
-    'carrot_cake':        3.15,
-    'ceviche':            0.68,
-    'cheese_plate':       3.50,
-    'cheesecake':         3.21,
-    'chicken_curry':      1.50,
-    'chicken_quesadilla': 2.24,
-    'chicken_wings':      2.66,
-    'chocolate_cake':     3.71,
-    'chocolate_mousse':   2.10,
-    'churros':            3.73,
-    'clam_chowder':       0.72,
-    'club_sandwich':      2.30,
-    'crab_cakes':         1.65,
-    'creme_brulee':       1.74,
-    'croque_madame':      2.40,
-    'cup_cakes':          3.51,
-    'deviled_eggs':       1.58,
-    'donuts':             3.89,
-    'dumplings':          1.66,
-    'edamame':            1.21,
-    'eggs_benedict':      1.94,
-    'escargots':          1.32,
-    'falafel':            3.33,
-    'filet_mignon':       2.71,
-    'fish_and_chips':     2.50,
-    'foie_gras':          4.62,
-    'french_fries':       3.12,
-    'french_onion_soup':  0.57,
-    'french_toast':       1.54,
-    'fried_calamari':     1.75,
-    'fried_rice':         1.63,
-    'frozen_yogurt':      1.27,
-    'garlic_bread':       3.27,
-    'gnocchi':            1.31,
-    'greek_salad':        0.74,
-    'grilled_cheese_sandwich': 3.10,
-    'grilled_salmon':     1.45,
-    'guacamole':          1.60,
-    'gyoza':              1.66,
-    'hamburger':          2.95,
-    'hot_and_sour_soup':  0.45,
-    'hot_dog':            2.90,
-    'huevos_rancheros':   1.45,
-    'hummus':             1.77,
-    'ice_cream':          2.07,
-    'lasagna':            1.35,
-    'lobster_bisque':     1.20,
-    'lobster_roll_sandwich': 2.45,
-    'macaroni_and_cheese': 1.64,
-    'macarons':           4.04,
-    'miso_soup':          0.40,
-    'mussels':            0.86,
-    'nachos':             3.06,
-    'omelette':           1.54,
-    'onion_rings':        3.11,
-    'oysters':            0.81,
-    'pad_thai':           1.85,
-    'paella':             1.60,
-    'pancakes':           2.27,
-    'panna_cotta':        1.60,
-    'peking_duck':        3.37,
-    'pho':                0.65,
-    'pizza':              2.66,
-    'pork_chop':          2.50,
-    'poutine':            1.68,
-    'prime_rib':          3.22,
-    'pulled_pork_sandwich': 2.70,
-    'ramen':              1.36,
-    'ravioli':            1.50,
-    'red_velvet_cake':    3.52,
-    'risotto':            1.42,
-    'samosa':             2.62,
-    'sashimi':            1.27,
-    'scallops':           0.88,
-    'seaweed_salad':      0.45,
-    'shrimp_and_grits':   1.65,
-    'spaghetti_bolognese': 1.80,
-    'spaghetti_carbonara': 2.07,
-    'spring_rolls':       1.80,
-    'steak':              2.50,
-    'strawberry_shortcake': 2.49,
-    'sushi':              1.43,
-    'tacos':              2.18,
-    'takoyaki':           1.85,
-    'tiramisu':           2.84,
-    'tuna_tartare':       1.08,
-    'waffles':            2.91,
+# ── Per-food nutrition database for all 101 Food-101 classes ──────────────────
+# Source: USDA FoodData Central (https://fdc.nal.usda.gov/) — typical serving
+# Each entry: (kcal/g, fat/g, protein/g, carb/g, typical_serving_g)
+# This implements the full "detect → portion estimate → nutrition DB" pipeline:
+#   Phase 5 identifies the food → look up serving_g → multiply by per-gram macros
+# When WeightMLP is confident, serving_g is overridden by the predicted weight.
+FOOD_NUTRITION_DB = {
+    # name                   kcal/g  fat/g  pro/g  carb/g serving_g
+    'apple_pie':            (2.37, 0.110, 0.022, 0.330,  125),
+    'baby_back_ribs':       (2.90, 0.190, 0.220, 0.000,  200),
+    'baklava':              (4.28, 0.230, 0.060, 0.520,   60),
+    'beef_carpaccio':       (1.62, 0.100, 0.200, 0.010,  100),
+    'beef_tartare':         (1.62, 0.100, 0.200, 0.010,  150),
+    'beet_salad':           (0.49, 0.015, 0.017, 0.100,  150),
+    'beignets':             (3.50, 0.160, 0.050, 0.480,   80),
+    'bibimbap':             (1.30, 0.038, 0.070, 0.200,  350),
+    'bread_pudding':        (1.85, 0.065, 0.054, 0.270,  150),
+    'breakfast_burrito':    (1.95, 0.090, 0.100, 0.200,  200),
+    'bruschetta':           (1.75, 0.065, 0.042, 0.260,  100),
+    'caesar_salad':         (0.75, 0.052, 0.040, 0.040,  200),
+    'cannoli':              (3.42, 0.170, 0.068, 0.390,   80),
+    'caprese_salad':        (0.96, 0.065, 0.059, 0.038,  200),
+    'carrot_cake':          (3.15, 0.140, 0.034, 0.430,  100),
+    'ceviche':              (0.68, 0.020, 0.120, 0.040,  150),
+    'cheese_plate':         (3.50, 0.280, 0.220, 0.010,   80),
+    'cheesecake':           (3.21, 0.220, 0.058, 0.260,  120),
+    'chicken_curry':        (1.50, 0.070, 0.120, 0.100,  250),
+    'chicken_quesadilla':   (2.24, 0.110, 0.130, 0.200,  180),
+    'chicken_wings':        (2.66, 0.170, 0.220, 0.060,  200),
+    'chocolate_cake':       (3.71, 0.175, 0.042, 0.540,  100),
+    'chocolate_mousse':     (2.10, 0.130, 0.040, 0.240,  100),
+    'churros':              (3.73, 0.170, 0.040, 0.530,   80),
+    'clam_chowder':         (0.72, 0.030, 0.055, 0.080,  240),
+    'club_sandwich':        (2.30, 0.100, 0.130, 0.240,  200),
+    'crab_cakes':           (1.65, 0.090, 0.130, 0.100,  150),
+    'creme_brulee':         (1.74, 0.100, 0.040, 0.210,  120),
+    'croque_madame':        (2.40, 0.140, 0.130, 0.200,  200),
+    'cup_cakes':            (3.51, 0.160, 0.035, 0.520,   65),
+    'deviled_eggs':         (1.58, 0.110, 0.100, 0.020,  100),
+    'donuts':               (3.89, 0.190, 0.049, 0.510,   75),
+    'dumplings':            (1.66, 0.050, 0.080, 0.250,  150),
+    'edamame':              (1.21, 0.052, 0.115, 0.100,  155),
+    'eggs_benedict':        (1.94, 0.130, 0.110, 0.120,  200),
+    'escargots':            (1.32, 0.065, 0.140, 0.060,  100),
+    'falafel':              (3.33, 0.170, 0.130, 0.320,  120),
+    'filet_mignon':         (2.71, 0.185, 0.210, 0.000,  200),
+    'fish_and_chips':       (2.50, 0.130, 0.110, 0.260,  300),
+    'foie_gras':            (4.62, 0.430, 0.115, 0.047,   80),
+    'french_fries':         (3.12, 0.150, 0.037, 0.410,  150),
+    'french_onion_soup':    (0.57, 0.020, 0.034, 0.080,  300),
+    'french_toast':         (1.54, 0.060, 0.070, 0.210,  150),
+    'fried_calamari':       (1.75, 0.080, 0.140, 0.150,  150),
+    'fried_rice':           (1.63, 0.052, 0.048, 0.300,  250),
+    'frozen_yogurt':        (1.27, 0.018, 0.038, 0.260,  150),
+    'garlic_bread':         (3.27, 0.130, 0.080, 0.430,   80),
+    'gnocchi':              (1.31, 0.012, 0.030, 0.270,  200),
+    'greek_salad':          (0.74, 0.053, 0.024, 0.060,  200),
+    'grilled_cheese_sandwich': (3.10, 0.150, 0.120, 0.310, 150),
+    'grilled_salmon':       (1.45, 0.065, 0.200, 0.000,  180),
+    'guacamole':            (1.60, 0.145, 0.020, 0.090,  100),
+    'gyoza':                (1.66, 0.055, 0.085, 0.240,  150),
+    'hamburger':            (2.95, 0.155, 0.150, 0.240,  220),
+    'hot_and_sour_soup':    (0.45, 0.015, 0.040, 0.060,  300),
+    'hot_dog':              (2.90, 0.180, 0.110, 0.230,  150),
+    'huevos_rancheros':     (1.45, 0.080, 0.080, 0.130,  250),
+    'hummus':               (1.77, 0.090, 0.076, 0.200,  100),
+    'ice_cream':            (2.07, 0.110, 0.036, 0.240,  150),
+    'lasagna':              (1.35, 0.052, 0.080, 0.150,  300),
+    'lobster_bisque':       (1.20, 0.070, 0.070, 0.100,  250),
+    'lobster_roll_sandwich':(2.45, 0.110, 0.140, 0.230,  200),
+    'macaroni_and_cheese':  (1.64, 0.062, 0.068, 0.220,  250),
+    'macarons':             (4.04, 0.140, 0.054, 0.610,   35),
+    'miso_soup':            (0.40, 0.010, 0.030, 0.058,  250),
+    'mussels':              (0.86, 0.022, 0.118, 0.037,  200),
+    'nachos':               (3.06, 0.150, 0.070, 0.380,  150),
+    'omelette':             (1.54, 0.110, 0.110, 0.010,  150),
+    'onion_rings':          (3.11, 0.160, 0.040, 0.400,  120),
+    'oysters':              (0.81, 0.023, 0.091, 0.049,  150),
+    'pad_thai':             (1.85, 0.068, 0.090, 0.250,  300),
+    'paella':               (1.60, 0.060, 0.110, 0.180,  300),
+    'pancakes':             (2.27, 0.060, 0.060, 0.380,  150),
+    'panna_cotta':          (1.60, 0.095, 0.035, 0.195,  120),
+    'peking_duck':          (3.37, 0.240, 0.190, 0.080,  200),
+    'pho':                  (0.65, 0.015, 0.060, 0.090,  450),
+    'pizza':                (2.66, 0.107, 0.111, 0.330,  200),
+    'pork_chop':            (2.50, 0.155, 0.230, 0.000,  200),
+    'poutine':              (1.68, 0.085, 0.055, 0.200,  400),
+    'prime_rib':            (3.22, 0.240, 0.200, 0.000,  250),
+    'pulled_pork_sandwich': (2.70, 0.120, 0.160, 0.260,  250),
+    'ramen':                (1.36, 0.042, 0.075, 0.190,  450),
+    'ravioli':              (1.50, 0.045, 0.075, 0.230,  250),
+    'red_velvet_cake':      (3.52, 0.160, 0.038, 0.520,  100),
+    'risotto':              (1.42, 0.040, 0.040, 0.250,  300),
+    'samosa':               (2.62, 0.130, 0.050, 0.330,  120),
+    'sashimi':              (1.27, 0.038, 0.200, 0.000,  150),
+    'scallops':             (0.88, 0.008, 0.170, 0.050,  150),
+    'seaweed_salad':        (0.45, 0.005, 0.020, 0.090,  100),
+    'shrimp_and_grits':     (1.65, 0.070, 0.110, 0.150,  300),
+    'spaghetti_bolognese':  (1.80, 0.060, 0.090, 0.240,  350),
+    'spaghetti_carbonara':  (2.07, 0.110, 0.090, 0.220,  350),
+    'spring_rolls':         (1.80, 0.065, 0.055, 0.260,  120),
+    'steak':                (2.50, 0.155, 0.230, 0.000,  250),
+    'strawberry_shortcake': (2.49, 0.100, 0.038, 0.380,  150),
+    'sushi':                (1.43, 0.020, 0.060, 0.280,  200),
+    'tacos':                (2.18, 0.100, 0.110, 0.220,  200),
+    'takoyaki':             (1.85, 0.085, 0.080, 0.230,  200),
+    'tiramisu':             (2.84, 0.145, 0.056, 0.340,  150),
+    'tuna_tartare':         (1.08, 0.030, 0.190, 0.015,  150),
+    'waffles':              (2.91, 0.110, 0.075, 0.420,  150),
 }
+# Keep a simple kcal/g alias for backward compatibility with scaling logic
+FOOD_KCAL_PER_G = {k: v[0] for k, v in FOOD_NUTRITION_DB.items()}
 
 def _food_name_to_key(name: str) -> str:
     """Normalise a food classifier label to a FOOD_KCAL_PER_G key."""
@@ -613,29 +619,66 @@ def predict(image: Image.Image):
             DATASET_MEAN_WEIGHT = 280.0
             MIN_WEIGHT          = 50.0
             _used_fallback = w_raw < MIN_WEIGHT or (w_std_mc > abs(w_raw) and w_raw < DATASET_MEAN_WEIGHT)
-            w_mean = DATASET_MEAN_WEIGHT if _used_fallback else max(w_raw, MIN_WEIGHT)
 
-            # Scale constants by food-specific density when Phase 5 is confident
-            const_keys     = list(nutrition_constants.keys())
-            active_constants = dict(nutrition_constants)
+            # ── Nutrition DB lookup (detect → portion → database) ──────────────
+            # When Phase 5 identifies the food (conf ≥ 40%), use per-food macros
+            # from FOOD_NUTRITION_DB (sourced from USDA FoodData Central).
+            # This implements the full pipeline:
+            #   Phase 5 label → FOOD_NUTRITION_DB → per-gram macros for all 4 targets
+            # The portion (grams) comes from WeightMLP when confident, or from
+            # the food-specific typical serving size in the DB as fallback.
+            _db_entry     = None
             _food_scale_note = ''
             if detected_food and food_conf and food_conf >= 0.40:
                 _fkey = _food_name_to_key(detected_food)
-                _food_kcal_g = FOOD_KCAL_PER_G.get(_fkey)
-                if _food_kcal_g is None:
-                    for k in FOOD_KCAL_PER_G:
+                _db_entry = FOOD_NUTRITION_DB.get(_fkey)
+                if _db_entry is None:
+                    # fuzzy match — find entry sharing most words with detected food
+                    for k in FOOD_NUTRITION_DB:
                         if any(p in k for p in _fkey.split('_') if len(p) > 4):
-                            _food_kcal_g = FOOD_KCAL_PER_G[k]; break
-                if _food_kcal_g:
-                    _cal_key     = next(k for k in const_keys if 'cal' in k)
-                    _scale       = _food_kcal_g / nutrition_constants[_cal_key]
-                    active_constants = {k: v * _scale for k, v in nutrition_constants.items()}
-                    _food_scale_note = f' ({_food_kcal_g:.2f} kcal/g)'
+                            _db_entry = FOOD_NUTRITION_DB[k]; break
+
+            # Decide portion weight: WeightMLP if confident, else DB serving size,
+            # else Nutrition5K dataset mean (280g)
+            if _used_fallback:
+                if _db_entry is not None:
+                    w_mean = float(_db_entry[4])   # typical serving size from DB
+                else:
+                    w_mean = DATASET_MEAN_WEIGHT
+            else:
+                w_mean = max(w_raw, MIN_WEIGHT)
+
+            # Build per-target nutrition from DB (all 4 macros) or fall back to
+            # global constants scaled by kcal ratio (old behaviour)
+            const_keys = list(nutrition_constants.keys())
+            if _db_entry is not None:
+                # Full DB lookup: each macro has its own per-gram value
+                # DB tuple: (kcal/g, fat/g, protein/g, carb/g, serving_g)
+                _db_kcal, _db_fat, _db_pro, _db_carb, _db_srv = _db_entry
+                _db_macro_per_g = {
+                    'calories': _db_kcal,
+                    'fat':      _db_fat,
+                    'protein':  _db_pro,
+                    'carb':     _db_carb,
+                    'carbs':    _db_carb,  # alias
+                }
+                active_constants = {
+                    k: _db_macro_per_g.get(k.replace('_per_g', ''),
+                       nutrition_constants[k])
+                    for k in const_keys
+                }
+                _food_scale_note = (f' · DB: {_db_kcal:.2f} kcal/g, '
+                                    f'{_db_fat:.3f} fat/g, '
+                                    f'{_db_pro:.3f} pro/g, '
+                                    f'{_db_carb:.3f} carb/g')
+            else:
+                # No DB match — fall back to global Nutrition5K constants
+                active_constants = dict(nutrition_constants)
 
             p6_mean = np.array([w_mean * active_constants[k] for k in const_keys], dtype=np.float32)
             p6_std  = np.array([w_std_mc * active_constants[k] for k in const_keys], dtype=np.float32)
-            _fb_note = ' — fallback weight' if _used_fallback else ''
-            _weight_note = f'**{w_mean:.0f}±{w_std_mc*2:.0f}g**{_fb_note}{_food_scale_note}'
+            _src = 'DB serving' if (_used_fallback and _db_entry) else ('fallback' if _used_fallback else 'WeightMLP')
+            _weight_note = f'**{w_mean:.0f}±{w_std_mc*2:.0f}g** ({_src}){_food_scale_note}'
 
         # ── Step 4 (Phase 4): direct regression via MLP ───────────────────────────
         p4_mean = p4_std = None
