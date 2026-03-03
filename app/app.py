@@ -754,27 +754,43 @@ def predict(image: Image.Image):
                 _query    = _food_name_to_key(detected_food)
                 _db_entry = _lookup_usda(_query)
 
-            # Fallback criteria (use USDA/restaurant serving size instead of MLP):
-            #  1. WeightMLP below hard floor (50g)
-            #  2. Very uncertain prediction relative to its own magnitude
-            #  3. Prediction is less than 40% of the USDA typical serving size —
-            #     this catches cases where MiDaS depth cues mislead the MLP
-            #     (e.g. a bowl seen from above looks shallow → low predicted weight)
-            #     40% threshold is purely geometric: anything less than ~2/5 of the
-            #     expected restaurant portion is almost certainly a depth artefact.
-            _usda_serving = float(_db_entry[4]) if _db_entry is not None else DATASET_MEAN_WEIGHT
-            _cv_fallback  = (w_std_mc > abs(w_raw) and w_raw < DATASET_MEAN_WEIGHT)
-            _size_fallback = (w_raw < 0.40 * _usda_serving)
-            _used_fallback = w_raw < MIN_WEIGHT or _cv_fallback or _size_fallback
+            # ── Weight estimation strategy ─────────────────────────────────────
+            # MiDaS produces *relative* depth (0–1), so WeightMLP cannot learn
+            # absolute grams reliably — real-world camera distance varies too much.
+            # Best strategy: use USDA/restaurant serving as the absolute anchor and
+            # treat the MLP output as a *relative scale factor* encoding "bigger or
+            # smaller than the average 280g Nutrition5K dish".
+            #
+            #   w_final = w_usda × clip(w_mlp / DATASET_MEAN_WEIGHT, 0.4, 2.5)
+            #
+            # This is strictly better than the old binary "MLP vs USDA" switch:
+            #   • When MLP predicts 420g (1.5×mean) for a heaped bowl, we scale up.
+            #   • When MLP predicts 140g (0.5×mean) for a small plate, we scale down.
+            #   • Clip [0.4, 2.5] prevents runaway scales from bad depth estimates.
+            # Hard-floor fallback (no USDA) stays intact as the last resort.
 
-            # Decide portion weight
-            if _used_fallback:
+            _usda_serving = float(_db_entry[4]) if _db_entry is not None else None
+            _cv_fallback  = (w_std_mc > abs(w_raw) and w_raw < DATASET_MEAN_WEIGHT)
+
+            if w_raw < MIN_WEIGHT or _cv_fallback:
+                # MLP output is completely unreliable — ignore it
+                _used_fallback = True
                 if _db_entry is not None:
-                    w_mean = float(_db_entry[4])
+                    w_mean = _usda_serving
+                    _scale_factor = 1.0
                 else:
                     w_mean = _restaurant_serving_g(detected_food or '')
+                    _scale_factor = 1.0
+            elif _db_entry is not None:
+                # USDA anchor + MLP relative scale (the preferred path)
+                _scale_factor = float(np.clip(w_raw / DATASET_MEAN_WEIGHT, 0.4, 2.5))
+                w_mean = _usda_serving * _scale_factor
+                _used_fallback = False
             else:
+                # No USDA entry at all — use raw MLP (last resort)
+                _scale_factor = 1.0
                 w_mean = max(w_raw, MIN_WEIGHT)
+                _used_fallback = False
 
             # Build per-target nutrition from DB (all 4 macros) or fall back to
             # global constants scaled by kcal ratio (old behaviour)
@@ -805,7 +821,12 @@ def predict(image: Image.Image):
 
             p6_mean = np.array([w_mean * active_constants[k] for k in const_keys], dtype=np.float32)
             p6_std  = np.array([w_std_mc * active_constants[k] for k in const_keys], dtype=np.float32)
-            _src = 'DB serving' if (_used_fallback and _db_entry) else ('fallback' if _used_fallback else 'WeightMLP')
+            if _used_fallback:
+                _src = 'USDA serving (MLP unreliable)'
+            elif _db_entry is not None:
+                _src = f'USDA×{_scale_factor:.2f} (MLP scale)'
+            else:
+                _src = 'WeightMLP (no USDA)'
             _weight_note = f'**{w_mean:.0f}±{w_std_mc*2:.0f}g** ({_src}){_food_scale_note}'
 
             # ── Build weight breakdown explanation for UI display ───────────────────────
@@ -832,22 +853,25 @@ def predict(image: Image.Image):
             _w_lo  = float(np.percentile(_w_arr, 2.5))
             _w_hi  = float(np.percentile(_w_arr, 97.5))
 
-            # Fallback explanation
+            # Step-3 explanation for UI
             if _used_fallback:
-                if _size_fallback:
-                    _fb_why = (f'WeightMLP raw = **{w_raw:.0f} g** '
-                               f'< 40% × USDA serving {_usda_serving:.0f} g = {0.4*_usda_serving:.0f} g '
-                               f'— likely a depth artefact (bowl/plate seen from above)')
-                elif _cv_fallback:
+                if _cv_fallback:
                     _fb_why = (f'High MC-Dropout uncertainty '
                                f'(σ = {w_std_mc:.0f} g > raw mean {w_raw:.0f} g) — unreliable prediction')
                 else:
-                    _fb_why = f'Raw prediction {w_raw:.0f} g ≤ 50 g hard floor'
-                _step3_txt = (f'⚠️ **Fallback triggered**: {_fb_why}  \n'
-                              f'Using **USDA serving = {w_mean:.0f} g** instead')
+                    _fb_why = f'Raw prediction {w_raw:.0f} g ≤ {MIN_WEIGHT:.0f} g hard floor'
+                _step3_txt = (f'⚠️ **MLP unreliable**: {_fb_why}  \n'
+                              f'Using **USDA/restaurant serving = {w_mean:.0f} g** instead')
+            elif _db_entry is not None:
+                _step3_txt = (
+                    f'✔️ **USDA-anchored scale**: USDA serving {_usda_serving:.0f} g '
+                    f'× MLP scale {_scale_factor:.2f} '
+                    f'(= {w_raw:.0f} g ÷ {DATASET_MEAN_WEIGHT:.0f} g dataset mean, '
+                    f'clipped to [0.4, 2.5])  \n'
+                    f'→ **{w_mean:.0f} g**'
+                )
             else:
-                _step3_txt = (f'✔️ **WeightMLP accepted** — {w_raw:.0f} g ≥ 40% of '
-                              f'USDA serving {_usda_serving:.0f} g')
+                _step3_txt = (f'✔️ **WeightMLP raw** (no USDA entry) — {w_mean:.0f} g')
 
             # Per-macro calorie equation rows
             _density_src = (f'USDA "{_food_name_to_key(detected_food)}"'
@@ -866,7 +890,10 @@ def predict(image: Image.Image):
                 f'**Step 2 — WeightMLP MC-Dropout** (30 stochastic forward passes, dropout kept active):  \n'
                 f'- Raw mean: **{w_raw:.0f} g** \u00b7 σ = {w_std_mc:.0f} g  \n'
                 f'- 95% credible interval: [{_w_lo:.0f} g — {_w_hi:.0f} g]  \n'
-                f'- Architecture: Linear(9→128) → BN → ReLU → Dropout \u00d73 → Linear(32→1)  \n\n'
+                f'- Architecture: Linear(9→128) → BN → ReLU → Dropout ×3 → Linear(32→1)  \n'
+                f'- ⚠️ MiDaS depth is **relative** (0–1), so raw grams are unreliable.  \n'
+                f'  MLP output is used as a **scale factor** on the USDA serving anchor:  \n'
+                f'  `w_final = w_USDA × clip(w_MLP / 280, 0.4, 2.5)`\n\n'
                 f'**Step 3 — Serving-size decision**:  \n{_step3_txt}  \n'
                 f'**Final weight used: {w_mean:.0f} g**\n\n'
                 f'**Step 4 — Nutrition equation** (density source: {_density_src}):  \n'
