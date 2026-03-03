@@ -77,6 +77,35 @@ USDA_API_KEY    = os.environ.get('USDA_API_KEY', 'DEMO_KEY')
 USDA_CACHE_FILE = os.path.join(MODELS_DIR, 'usda_cache.json')
 _usda_cache: dict = {}   # food_name -> (kcal/g, fat/g, protein/g, carb/g, serving_g)
 
+# ── Restaurant-portion defaults (typical served weight, not USDA lab sample) ──
+# Used when WeightMLP is unreliable AND USDA serving_g looks too small (<150g)
+_RESTAURANT_PORTIONS = {
+    'pasta': 350, 'spaghetti': 350, 'carbonara': 350, 'linguine': 350,
+    'fettuccine': 350, 'lasagna': 300, 'gnocchi': 250, 'ravioli': 280,
+    'ramen': 450, 'pho': 450, 'noodle': 350, 'pad thai': 300,
+    'pizza': 250, 'burger': 250, 'hamburger': 250, 'hot dog': 150,
+    'steak': 220, 'pork chop': 200, 'chicken': 220, 'salmon': 180,
+    'rice': 300, 'fried rice': 300, 'bibimbap': 350, 'paella': 300,
+    'curry': 350, 'soup': 350, 'stew': 350, 'chowder': 300,
+    'sandwich': 220, 'club sandwich': 220, 'grilled cheese': 200, 'burrito': 250,
+    'sushi': 250, 'sashimi': 150, 'tacos': 220, 'gyoza': 180,
+    'pancakes': 180, 'waffles': 180, 'french toast': 180,
+    'omelette': 200, 'eggs benedict': 220, 'huevos': 250,
+    'cake': 120, 'cheesecake': 120, 'tiramisu': 150, 'ice cream': 150,
+    'salad': 250, 'caesar salad': 250, 'greek salad': 200,
+    'nachos': 200, 'chicken wings': 250, 'spring rolls': 150,
+    'dumplings': 200, 'bibimbap': 350, 'peking duck': 250,
+}
+
+
+def _restaurant_serving_g(food_name: str) -> float:
+    """Return a sensible restaurant-portion weight (g) for a given food name."""
+    lower = food_name.lower()
+    for kw, g in _RESTAURANT_PORTIONS.items():
+        if kw in lower:
+            return float(g)
+    return 280.0   # Nutrition5K dataset mean as final fallback
+
 
 def _load_usda_cache():
     """Load previously fetched USDA results from disk into memory."""
@@ -99,16 +128,11 @@ def _lookup_usda(food_name: str):
     """
     Query USDA FoodData Central for per-gram macros + typical serving size.
 
-    Pipeline:
-      food_name (e.g. 'omelette')
-        → check in-memory cache
-        → if miss: GET api.nal.usda.gov/fdc/v1/foods/search?query=omelette
-        → parse top result: kcal, fat, protein, carb (all per 100g → per g)
-        → persist to cache file
-        → return (kcal/g, fat/g, protein/g, carb/g, serving_g)
+    Fetches up to 5 FNDDS results and selects the one with the HIGHEST
+    plausible caloric density (avoids diluted/low-calorie survey variants).
+    Energy is parsed by unit (kcal only, ignoring kJ entries).
 
-    Returns None if API is unreachable, key is missing, or result is implausible.
-    Cached results are returned instantly on subsequent calls.
+    Returns (kcal/g, fat/g, protein/g, carb/g, serving_g) or None.
     """
     key = food_name.lower().replace('_', ' ').strip()
     if key in _usda_cache:
@@ -117,52 +141,77 @@ def _lookup_usda(food_name: str):
     if not USDA_API_KEY:
         return None
 
+    def _parse_kcal(nutrient_list):
+        """Extract energy in kcal — skip kJ entries to avoid unit confusion."""
+        best = 0.0
+        for n in nutrient_list:
+            if 'energy' in n.get('nutrientName', '').lower() \
+                    and 'kj' not in n.get('unitName', '').lower():
+                val = float(n.get('value') or 0)
+                if val > best:
+                    best = val
+        return best
+
+    def _parse_food(food):
+        """Return (kcal_g, fat_g, prot_g, carb_g, serving_g) for one USDA result."""
+        nl  = food.get('foodNutrients', [])
+        nmap = {n['nutrientName']: float(n.get('value') or 0) for n in nl}
+        kcal    = _parse_kcal(nl)
+        fat     = nmap.get('Total lipid (fat)', 0.0)
+        protein = nmap.get('Protein', 0.0)
+        carb    = nmap.get('Carbohydrate, by difference', 0.0)
+        kcal_g  = kcal / 100.0
+        fat_g   = fat  / 100.0
+        prot_g  = protein / 100.0
+        carb_g  = carb / 100.0
+        srv = 150.0
+        for m in food.get('finalFoodInputFoods', []):
+            gw = m.get('gramWeight')
+            if gw and float(gw) > 20:
+                srv = float(gw)
+                break
+        return kcal_g, fat_g, prot_g, carb_g, srv
+
     try:
         query = urllib.parse.quote(key)
-        url   = (f'https://api.nal.usda.gov/fdc/v1/foods/search'
-                 f'?query={query}&pageSize=1&dataType=Survey%20(FNDDS)'
-                 f'&api_key={USDA_API_KEY}')
+        # Fetch up to 5 FNDDS results — we'll pick the best one
+        url = (f'https://api.nal.usda.gov/fdc/v1/foods/search'
+               f'?query={query}&pageSize=5&dataType=Survey%20(FNDDS)'
+               f'&api_key={USDA_API_KEY}')
         req = urllib.request.Request(url, headers={'Accept': 'application/json'})
-        with urllib.request.urlopen(req, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=6) as resp:
             data = json.loads(resp.read())
 
         foods = data.get('foods', [])
         if not foods:
-            # retry without dataType filter (catches branded / foundation foods)
-            url2  = (f'https://api.nal.usda.gov/fdc/v1/foods/search'
-                     f'?query={query}&pageSize=1&api_key={USDA_API_KEY}')
-            req2  = urllib.request.Request(url2, headers={'Accept': 'application/json'})
-            with urllib.request.urlopen(req2, timeout=5) as resp2:
-                data  = json.loads(resp2.read())
+            # Retry without dataType filter (catches Foundation / SR Legacy foods)
+            url2 = (f'https://api.nal.usda.gov/fdc/v1/foods/search'
+                    f'?query={query}&pageSize=5&api_key={USDA_API_KEY}')
+            req2 = urllib.request.Request(url2, headers={'Accept': 'application/json'})
+            with urllib.request.urlopen(req2, timeout=6) as resp2:
+                data = json.loads(resp2.read())
             foods = data.get('foods', [])
         if not foods:
             return None
 
-        # Parse nutrient values from the top result (reported per 100 g)
-        nutrients = {n['nutrientName']: n['value']
-                     for n in foods[0].get('foodNutrients', [])}
-        kcal    = nutrients.get('Energy',
-                  nutrients.get('Energy (Atwater General Factors)', 0.0))
-        fat     = nutrients.get('Total lipid (fat)', 0.0)
-        protein = nutrients.get('Protein', 0.0)
-        carb    = nutrients.get('Carbohydrate, by difference', 0.0)
-
-        # Convert from per-100g to per-gram
-        kcal_g, fat_g, prot_g, carb_g = (
-            kcal / 100.0, fat / 100.0, protein / 100.0, carb / 100.0
-        )
-
-        # Typical serving size — fall back to 150g if not stated
-        serving_g = 150.0
-        for measure in foods[0].get('finalFoodInputFoods', []):
-            gw = measure.get('gramWeight')
-            if gw and float(gw) > 20:
-                serving_g = float(gw)
-                break
-
-        # Sanity check: discard clearly wrong or empty results
-        if kcal_g < 0.05 or kcal_g > 9.5:
+        # Parse all candidates; keep those within a plausible caloric range
+        # (0.2–6.0 kcal/g covers everything from broth to cheese/butter)
+        candidates = []
+        for food in foods:
+            parsed = _parse_food(food)
+            if 0.2 <= parsed[0] <= 6.0:
+                candidates.append(parsed)
+        if not candidates:
             return None
+
+        # Pick the HIGHEST-calorie plausible result — avoids diluted survey
+        # variants (e.g. "carbonara with added vegetables / broth") and instead
+        # selects the full-calorie version of the dish.
+        kcal_g, fat_g, prot_g, carb_g, serving_g = max(candidates, key=lambda t: t[0])
+
+        # Use restaurant-portion serving if USDA value looks like a lab sample
+        if serving_g < 150:
+            serving_g = _restaurant_serving_g(key)
 
         entry = (kcal_g, fat_g, prot_g, carb_g, serving_g)
         _usda_cache[key] = entry
@@ -654,9 +703,11 @@ def predict(image: Image.Image):
             # else Nutrition5K dataset mean (280g)
             if _used_fallback:
                 if _db_entry is not None:
-                    w_mean = float(_db_entry[4])   # typical serving size from DB
+                    # Use restaurant-portion size (already encoded in _db_entry[4]
+                    # via _restaurant_serving_g); always >= 150g for main dishes
+                    w_mean = float(_db_entry[4])
                 else:
-                    w_mean = DATASET_MEAN_WEIGHT
+                    w_mean = _restaurant_serving_g(detected_food or '')
             else:
                 w_mean = max(w_raw, MIN_WEIGHT)
 
