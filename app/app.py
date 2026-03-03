@@ -128,43 +128,70 @@ def _lookup_usda(food_name: str):
     """
     Query USDA FoodData Central for per-gram macros + typical serving size.
 
-    Fetches up to 5 FNDDS results and selects the one with the HIGHEST
-    plausible caloric density (avoids diluted/low-calorie survey variants).
-    Energy is parsed by unit (kcal only, ignoring kJ entries).
+    Strategy
+    ────────
+    1. Build query list: full dish name PLUS each individual keyword (>=4 chars).
+       e.g. "spaghetti carbonara" → ["spaghetti carbonara", "carbonara", "spaghetti"]
+       FNDDS often lacks composite dish names (e.g. "carbonara") so falling back
+       to keywords is essential — the keyword "carbonara" hits branded pasta meals
+       at the correct ~2 kcal/g instead of the FNDDS "spaghetti sauce" at 0.9.
+
+    2. For every USDA result compute kcal via the ATWATER formula:
+           kcal/g = protein×4 + fat×9 + carbs×4  (all in g/g)
+       This is more reliable than the survey "Energy" field which varies by
+       preparation and can capture sauces-only rather than full plated dishes.
+
+    3. Keep candidates in 0.5–4.5 kcal/g — the realistic range for a plated
+       restaurant portion (broth/salad ~0.5, cheese/nut dishes up to ~4.5).
+
+    4. Pick the highest Atwater-consistent candidate across ALL queries.
+       Higher kcal/g wins because USDA survey data skews toward light/home-cooked
+       versions; restaurant dishes are calorie-denser.
 
     Returns (kcal/g, fat/g, protein/g, carb/g, serving_g) or None.
     """
-    key = food_name.lower().replace('_', ' ').strip()
-    if key in _usda_cache:
-        return _usda_cache[key]
+    cache_key = food_name.lower().replace('_', ' ').strip()
+    if cache_key in _usda_cache:
+        return _usda_cache[cache_key]
 
     if not USDA_API_KEY:
         return None
 
-    def _parse_kcal(nutrient_list):
-        """Extract energy in kcal — skip kJ entries to avoid unit confusion."""
-        best = 0.0
-        for n in nutrient_list:
-            if 'energy' in n.get('nutrientName', '').lower() \
-                    and 'kj' not in n.get('unitName', '').lower():
-                val = float(n.get('value') or 0)
-                if val > best:
-                    best = val
-        return best
+    # Build list of queries: full name first, then individual distinctive words
+    words = [w for w in cache_key.split() if len(w) >= 4]
+    words.sort(key=len, reverse=True)   # longer/more-specific words first
+    queries_to_try = [cache_key] + [w for w in words if w != cache_key]
+
+    def _fetch_foods(q: str):
+        """Fetch up to 8 results for query q (no dataType filter = all sources)."""
+        params = urllib.parse.urlencode({
+            'query': q, 'pageSize': 8, 'api_key': USDA_API_KEY
+        })
+        url = f'https://api.nal.usda.gov/fdc/v1/foods/search?{params}'
+        req = urllib.request.Request(url, headers={'Accept': 'application/json'})
+        with urllib.request.urlopen(req, timeout=7) as resp:
+            return json.loads(resp.read()).get('foods', [])
 
     def _parse_food(food):
-        """Return (kcal_g, fat_g, prot_g, carb_g, serving_g) for one USDA result."""
-        nl  = food.get('foodNutrients', [])
-        nmap = {n['nutrientName']: float(n.get('value') or 0) for n in nl}
-        kcal    = _parse_kcal(nl)
-        fat     = nmap.get('Total lipid (fat)', 0.0)
-        protein = nmap.get('Protein', 0.0)
-        carb    = nmap.get('Carbohydrate, by difference', 0.0)
-        kcal_g  = kcal / 100.0
-        fat_g   = fat  / 100.0
-        prot_g  = protein / 100.0
-        carb_g  = carb / 100.0
-        srv = 150.0
+        """
+        Return (kcal_g, fat_g, prot_g, carb_g, serving_g).
+        kcal is computed with the Atwater formula from macros — not the survey
+        Energy field — because USDA macros are more accurately measured than
+        per-serving energy values in the FNDDS survey.
+        """
+        nmap = {n['nutrientName']: float(n.get('value') or 0)
+                for n in food.get('foodNutrients', [])}
+        fat_100  = nmap.get('Total lipid (fat)', 0.0)
+        prot_100 = nmap.get('Protein', 0.0)
+        carb_100 = nmap.get('Carbohydrate, by difference', 0.0)
+        # Atwater: kcal per 100 g
+        kcal_100 = prot_100 * 4.0 + fat_100 * 9.0 + carb_100 * 4.0
+        kcal_g = kcal_100 / 100.0
+        fat_g  = fat_100  / 100.0
+        prot_g = prot_100 / 100.0
+        carb_g = carb_100 / 100.0
+        # Serving size from USDA input foods, else 0 (caller handles fallback)
+        srv = 0.0
         for m in food.get('finalFoodInputFoods', []):
             gw = m.get('gramWeight')
             if gw and float(gw) > 20:
@@ -172,56 +199,40 @@ def _lookup_usda(food_name: str):
                 break
         return kcal_g, fat_g, prot_g, carb_g, srv
 
+    # Plausible range for a plated restaurant dish (not a pure sauce or raw oil)
+    KCAL_MIN, KCAL_MAX = 0.5, 4.5
+
     try:
-        query = urllib.parse.quote(key)
-        # Fetch up to 5 FNDDS results — we'll pick the best one
-        url = (f'https://api.nal.usda.gov/fdc/v1/foods/search'
-               f'?query={query}&pageSize=5&dataType=Survey%20(FNDDS)'
-               f'&api_key={USDA_API_KEY}')
-        req = urllib.request.Request(url, headers={'Accept': 'application/json'})
-        with urllib.request.urlopen(req, timeout=6) as resp:
-            data = json.loads(resp.read())
+        all_candidates = []
+        for q in queries_to_try:
+            try:
+                for food in _fetch_foods(q):
+                    parsed = _parse_food(food)
+                    if KCAL_MIN <= parsed[0] <= KCAL_MAX:
+                        all_candidates.append(parsed)
+            except Exception:
+                continue   # one query failing should not abort the loop
 
-        foods = data.get('foods', [])
-        if not foods:
-            # Retry without dataType filter (catches Foundation / SR Legacy foods)
-            url2 = (f'https://api.nal.usda.gov/fdc/v1/foods/search'
-                    f'?query={query}&pageSize=5&api_key={USDA_API_KEY}')
-            req2 = urllib.request.Request(url2, headers={'Accept': 'application/json'})
-            with urllib.request.urlopen(req2, timeout=6) as resp2:
-                data = json.loads(resp2.read())
-            foods = data.get('foods', [])
-        if not foods:
+        if not all_candidates:
             return None
 
-        # Parse all candidates; keep those within a plausible caloric range
-        # (0.2–6.0 kcal/g covers everything from broth to cheese/butter)
-        candidates = []
-        for food in foods:
-            parsed = _parse_food(food)
-            if 0.2 <= parsed[0] <= 6.0:
-                candidates.append(parsed)
-        if not candidates:
-            return None
+        # Best = highest Atwater kcal/g among all queries and data types
+        kcal_g, fat_g, prot_g, carb_g, srv = max(all_candidates, key=lambda t: t[0])
 
-        # Pick the HIGHEST-calorie plausible result — avoids diluted survey
-        # variants (e.g. "carbonara with added vegetables / broth") and instead
-        # selects the full-calorie version of the dish.
-        kcal_g, fat_g, prot_g, carb_g, serving_g = max(candidates, key=lambda t: t[0])
+        # Serving size: use USDA value only if it looks like a real meal portion;
+        # otherwise ask _restaurant_serving_g for a sensible default.
+        if srv < 150:
+            srv = _restaurant_serving_g(cache_key)
 
-        # Use restaurant-portion serving if USDA value looks like a lab sample
-        if serving_g < 150:
-            serving_g = _restaurant_serving_g(key)
-
-        entry = (kcal_g, fat_g, prot_g, carb_g, serving_g)
-        _usda_cache[key] = entry
+        entry = (kcal_g, fat_g, prot_g, carb_g, srv)
+        _usda_cache[cache_key] = entry
         _save_usda_cache()
-        print(f'  USDA lookup "{key}": {kcal_g:.2f} kcal/g  fat={fat_g:.3f}  '
-              f'pro={prot_g:.3f}  carb={carb_g:.3f}  serving={serving_g:.0f}g')
+        print(f'  USDA "{cache_key}": {kcal_g:.2f} kcal/g  '
+              f'F={fat_g:.3f}  P={prot_g:.3f}  C={carb_g:.3f}  srv={srv:.0f}g')
         return entry
 
     except Exception as _e:
-        print(f'  ⚠ USDA lookup failed for "{key}": {_e}')
+        print(f'  ⚠ USDA lookup failed for "{cache_key}": {_e}')
         return None
 
 
@@ -759,22 +770,35 @@ def predict(image: Image.Image):
             p4_mean = _p4_mc.mean(0)
             p4_std  = _p4_mc.std(0)
 
-        # ── Step 5: Ensemble Phase 4 + Phase 6 (inverse-variance weighting) ───────
+        # ── Step 5: Ensemble Phase 4 + Phase 6 ───────────────────────────────────
+        # When a food-specific USDA entry was found with plausible caloric density
+        # (>= 1.0 kcal/g), trust Phase 6 heavily — Phase 4 was trained on lab-
+        # controlled Nutrition5K dishes and under-predicts restaurant portions.
+        # Without a food-specific match, fall back to inverse-variance weighting.
         if p6_mean is not None and p4_mean is not None:
-            # Weight each phase by 1/variance — more certain model gets more weight
-            p6_var = np.clip(p6_std ** 2, 1e-6, None)
-            p4_var = np.clip(p4_std ** 2, 1e-6, None)
-            w6 = 1.0 / p6_var
-            w4 = 1.0 / p4_var
-            w_total  = w6 + w4
-            mean_pred = (w6 * p6_mean + w4 * p4_mean) / w_total
-            # Combined uncertainty (propagated)
-            std_pred  = np.sqrt(1.0 / w_total)
-            # Compute per-macro weights for display (average across macros)
-            _alpha6 = float((w6 / w_total).mean())
-            _alpha4 = 1.0 - _alpha6
+            _usda_confidence = (_db_entry is not None and _db_entry[0] >= 1.0
+                                and food_conf is not None and food_conf >= 0.15)
+            if _usda_confidence:
+                # Food type known + USDA lookup good → Phase 6 dominates
+                _alpha6 = 0.85
+                _alpha4 = 0.15
+                mean_pred = _alpha6 * p6_mean + _alpha4 * p4_mean
+                std_pred  = np.sqrt(_alpha6**2 * p6_std**2 + _alpha4**2 * p4_std**2)
+                _blend_note = 'food-specific USDA'
+            else:
+                # No confident food match — use inverse-variance
+                p6_var = np.clip(p6_std ** 2, 1e-6, None)
+                p4_var = np.clip(p4_std ** 2, 1e-6, None)
+                w6 = 1.0 / p6_var
+                w4 = 1.0 / p4_var
+                w_total   = w6 + w4
+                mean_pred = (w6 * p6_mean + w4 * p4_mean) / w_total
+                std_pred  = np.sqrt(1.0 / w_total)
+                _alpha6   = float((w6 / w_total).mean())
+                _alpha4   = 1.0 - _alpha6
+                _blend_note = 'inverse-variance'
             ensemble_note = (f'\n_Ensemble: Phase 6 weight {_alpha6*100:.0f}% · '
-                             f'Phase 4 {_alpha4*100:.0f}% (inverse-variance)_'
+                             f'Phase 4 {_alpha4*100:.0f}% ({_blend_note})_'
                              f'\n_Phase 6 weight prediction: {_weight_note}_')
         elif p6_mean is not None:
             mean_pred, std_pred = p6_mean, p6_std
