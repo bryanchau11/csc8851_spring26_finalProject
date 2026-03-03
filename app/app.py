@@ -1,8 +1,9 @@
 """
-Nutrition5K — Gradio Demo App  (Phase 4 pipeline)
+Nutrition5K — Gradio Demo App  (Phase 4 + 5 + 6 pipeline)
 
-Two inference modes (auto-selected based on available checkpoints):
-  Phase 4 (preferred): YOLOv8-seg → MiDaS depth → MLP regression + MC uncertainty
+Inference priority (auto-selected based on available checkpoints):
+  Phase 6 (preferred): weight-first — predict weight (g) → × dataset constants → nutrition
+  Phase 4 (fallback) : YOLO + MiDaS depth → MLP direct regression + MC uncertainty
   Phase 3 (fallback) : ResNet-50 direct image → nutrition regression
 
 Usage:
@@ -10,9 +11,12 @@ Usage:
     python app/app.py
 
 Required files in models/:
-    best_mlp.pt          ← Phase 4 MLP  (from Kaggle output of 04_yolo_depth_pipeline)
-    mlp_feat_stats.npz   ← feature normalisation stats
-    best_model.pt        ← Phase 3 ResNet fallback
+    best_weight_mlp.pt       ← Phase 6 WeightMLP  (06_weight_prediction.ipynb)
+    nutrition_constants.json ← calorie density constants (kcal/g, fat/g, ...)
+    weight_feat_stats.npz    ← Phase 6 feature normalisation stats
+    best_mlp.pt              ← Phase 4 MLP  (fallback)
+    mlp_feat_stats.npz       ← Phase 4 feature normalisation stats
+    best_model.pt            ← Phase 3 ResNet fallback
 """
 
 import os, json, warnings
@@ -28,9 +32,16 @@ import gradio as gr
 warnings.filterwarnings('ignore')
 
 MODELS_DIR    = os.path.join(os.path.dirname(__file__), '..', 'models')
+# Phase 6 — weight-first (preferred)
+P6_CKPT       = os.path.join(MODELS_DIR, 'best_weight_mlp.pt')
+P6_CONST      = os.path.join(MODELS_DIR, 'nutrition_constants.json')
+P6_STATS      = os.path.join(MODELS_DIR, 'weight_feat_stats.npz')
+# Phase 4 — direct regression (fallback)
 P4_CKPT       = os.path.join(MODELS_DIR, 'best_mlp.pt')
 P4_STATS      = os.path.join(MODELS_DIR, 'mlp_feat_stats.npz')
+# Phase 3 — ResNet baseline (fallback)
 P3_CKPT       = os.path.join(MODELS_DIR, 'best_model.pt')
+# Phase 5 — food classifier (optional, adds food-type label)
 FOOD_CLF_CKPT = os.path.join(MODELS_DIR, 'best_food_classifier.pt')
 FOOD_CLF_LBLS = os.path.join(MODELS_DIR, 'food101_labels.json')
 IMG_SIZE      = 224
@@ -69,6 +80,7 @@ FOOD_CLASSES = set()   # populated after yolo_model is loaded
 # ─────────────────────────────────────────────────────────────────────────────
 
 class NutritionMLP(nn.Module):
+    """Phase 4 — predicts [calories, fat, protein, carbs] directly."""
     def __init__(self, in_feats: int, num_targets: int, dropout: float = 0.2):
         super().__init__()
         self.net = nn.Sequential(
@@ -78,6 +90,20 @@ class NutritionMLP(nn.Module):
             nn.Linear(32, num_targets),
         )
     def forward(self, x): return self.net(x)
+
+
+class WeightMLP(nn.Module):
+    """Phase 6 — predicts dish weight in grams (1 output).
+    Nutrition = predicted_weight × dataset_constants."""
+    def __init__(self, in_feats: int = 9, dropout: float = 0.2):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(in_feats, 128), nn.BatchNorm1d(128), nn.ReLU(), nn.Dropout(dropout),
+            nn.Linear(128, 64),       nn.BatchNorm1d(64),  nn.ReLU(), nn.Dropout(dropout),
+            nn.Linear(64,  32),       nn.BatchNorm1d(32),  nn.ReLU(), nn.Dropout(dropout),
+            nn.Linear(32, 1),
+        )
+    def forward(self, x): return self.net(x).squeeze(-1)   # (B,) scalar
 
 
 class NutritionEstimator(nn.Module):
@@ -119,17 +145,51 @@ class FoodClassifier(nn.Module):
 # Load models at startup
 # ─────────────────────────────────────────────────────────────────────────────
 
-pipeline_mode = None   # 'phase4' or 'phase3'
-mlp = yolo_model = midas_model = midas_transform = None
+pipeline_mode = None   # 'phase6', 'phase4', or 'phase3'
+mlp = weight_mlp_model = yolo_model = midas_model = midas_transform = None
 feat_mean = feat_std = None
+nutrition_constants = {}   # Phase 6 calorie-density constants
 target_cols = ['calories', 'fat', 'protein', 'carbs']
 
 # Phase 5 food classifier (optional — loaded if checkpoint exists)
 food_clf        = None
 food_clf_labels = []   # list[str] index → class name
 
+# ── Try Phase 6 (weight-first approach) ──────────────────────────────────────
+if os.path.isfile(P6_CKPT) and os.path.isfile(P6_CONST) and os.path.isfile(P6_STATS):
+    try:
+        from ultralytics import YOLO as _YOLO
+        yolo_model = _YOLO('yolov8n-seg.pt')
+        FOOD_CLASSES.update(_build_food_classes(yolo_model))
+        print(f'✓ YOLO food classes: {[yolo_model.names[i] for i in sorted(FOOD_CLASSES)]}')
+
+        stats = np.load(P6_STATS, allow_pickle=True)
+        feat_mean = stats['feat_mean'].astype(np.float32)
+        feat_std  = stats['feat_std'].astype(np.float32)
+
+        with open(P6_CONST) as _f:
+            nutrition_constants = json.load(_f)
+        # Derive target_cols order from constant keys (strip _per_g)
+        target_cols = [k.replace('_per_g', '') for k in nutrition_constants]
+
+        ckpt = torch.load(P6_CKPT, map_location=device, weights_only=False)
+        weight_mlp_model = WeightMLP(in_feats=9).to(device)
+        weight_mlp_model.load_state_dict(ckpt['model_state_dict'])
+        weight_mlp_model.eval()
+
+        midas_model = torch.hub.load('intel-isl/MiDaS', 'MiDaS_small', trust_repo=True)
+        midas_model.to(device).eval()
+        _t = torch.hub.load('intel-isl/MiDaS', 'transforms', trust_repo=True)
+        midas_transform = _t.small_transform
+
+        pipeline_mode = 'phase6'
+        print(f'✓ Phase 6 pipeline loaded  (weight-first, targets: {target_cols})')
+        print(f'  Constants: { {k: round(v,4) for k,v in nutrition_constants.items()} }')
+    except Exception as e:
+        print(f'⚠ Phase 6 load failed ({e}) — trying Phase 4 fallback')
+
 # ── Try Phase 4 ───────────────────────────────────────────────────────────────
-if os.path.isfile(P4_CKPT) and os.path.isfile(P4_STATS):
+if pipeline_mode is None and os.path.isfile(P4_CKPT) and os.path.isfile(P4_STATS):
     try:
         from ultralytics import YOLO as _YOLO
         yolo_model = _YOLO('yolov8n-seg.pt')
@@ -342,26 +402,48 @@ def predict(image: Image.Image):
         return ('No model checkpoint found. Download best_mlp.pt + mlp_feat_stats.npz '
                 'from Kaggle output and place them in models/.'), None, []
 
-    if pipeline_mode == 'phase4':
+    if pipeline_mode in ('phase6', 'phase4'):
         feat, items, raw_mask = _extract_features(image)
         x    = torch.tensor(feat).unsqueeze(0).to(device)
 
-        # MC Dropout uncertainty — keep Dropout active but BatchNorm in eval
-        # Use fixed seed so same image always gives same result
-        mlp.eval()
-        for m in mlp.modules():
-            if isinstance(m, nn.Dropout):
-                m.train()
-        torch.manual_seed(42)
-        preds_mc = []
-        with torch.no_grad():
-            for _ in range(MC_SAMPLES):
-                preds_mc.append(mlp(x).squeeze(0).cpu().numpy())
-        # Reset back to full eval so next call starts clean
-        mlp.eval()
-        preds_mc = np.stack(preds_mc)
-        mean_pred = preds_mc.mean(0)
-        std_pred  = preds_mc.std(0)
+        if pipeline_mode == 'phase6':
+            # ── Phase 6: predict weight → multiply by constants ────────────────
+            weight_mlp_model.eval()
+            for m in weight_mlp_model.modules():
+                if isinstance(m, nn.Dropout): m.train()
+            torch.manual_seed(42)
+            weight_samples = []
+            with torch.no_grad():
+                for _ in range(MC_SAMPLES):
+                    weight_samples.append(weight_mlp_model(x).item())
+            weight_mlp_model.eval()
+
+            w_mean = max(float(np.mean(weight_samples)), 10.0)   # clamp ≥ 10g
+            w_std  = float(np.std(weight_samples))
+
+            # Apply dataset constants: nutrition = weight × constant
+            const_keys = list(nutrition_constants.keys())  # e.g. calories_per_g, ...
+            mean_pred = np.array([w_mean * nutrition_constants[k] for k in const_keys],
+                                 dtype=np.float32)
+            std_pred  = np.array([w_std  * nutrition_constants[k] for k in const_keys],
+                                 dtype=np.float32)
+            # target_cols was set from const keys at load time
+            mode_extra = f'\n_Predicted weight: **{w_mean:.0f} ± {w_std*2:.0f}g** (MC Dropout, 30 samples)_'
+        else:
+            # ── Phase 4: direct regression ─────────────────────────────────────
+            mlp.eval()
+            for m in mlp.modules():
+                if isinstance(m, nn.Dropout): m.train()
+            torch.manual_seed(42)
+            preds_mc = []
+            with torch.no_grad():
+                for _ in range(MC_SAMPLES):
+                    preds_mc.append(mlp(x).squeeze(0).cpu().numpy())
+            mlp.eval()
+            preds_mc = np.stack(preds_mc)
+            mean_pred = preds_mc.mean(0)
+            std_pred  = preds_mc.std(0)
+            mode_extra = ''
 
         # Find calories index for per-item breakdown
         cal_idx = next((i for i, c in enumerate(target_cols) if 'cal' in c.lower()), 0)
@@ -394,7 +476,12 @@ def predict(image: Image.Image):
 
         result_json = {col: f'{mu:.1f} ± {sig*2:.1f}' for col, mu, sig in zip(target_cols, mean_pred, std_pred)}
         clf_note  = f'🍽 Detected food: **{detected_food}** ({food_conf*100:.0f}% confidence)\n\n' if detected_food else ''
-        mode_note = f'{clf_note}_Pipeline: YOLOv8-seg → EfficientNet-B0 food type → MiDaS depth → MLP + MC Dropout_'
+        if pipeline_mode == 'phase6':
+            mode_note = (f'{clf_note}'
+                         f'_Pipeline: Phase 6 — YOLOv8-seg + MiDaS depth → WeightMLP → nutrition × constants_'
+                         f'{mode_extra}')
+        else:
+            mode_note = f'{clf_note}_Pipeline: YOLOv8-seg → EfficientNet-B0 food type → MiDaS depth → MLP + MC Dropout_'
 
     else:  # phase3
         img_t = val_transform(image.convert('RGB')).unsqueeze(0).to(device)
@@ -414,7 +501,8 @@ def predict(image: Image.Image):
 # ─────────────────────────────────────────────────────────────────────────────
 
 mode_label = {
-    'phase4': '🔬 Phase 4+5 — YOLO + EfficientNet food type + Depth + MLP (with uncertainty)',
+    'phase6': '🎯 Phase 6 — Weight-First: YOLO + MiDaS → WeightMLP → × dataset constants (professor spec)',
+    'phase4': '🔬 Phase 4+5 — YOLO + EfficientNet food type + Depth + MLP direct regression',
     'phase3': '📊 Phase 3 — ResNet-50 baseline',
     None:     '⚠ No model loaded',
 }
@@ -422,9 +510,13 @@ mode_label = {
 clf_label = '🍕 Phase 5 food classifier active' if food_clf is not None else '⚠ No food classifier (run 05_food_classifier.ipynb to enable food-type detection)'
 
 with gr.Blocks(title='Nutrition5K Estimator') as demo:
+    p6_note = ('> **Phase 6 active**: Dish weight is predicted first, then converted to calories/macros '
+               'using calorie-density constants derived from Nutrition5K. '
+               '(Professor spec §4.3)\n\n') if pipeline_mode == 'phase6' else ''
     gr.Markdown(
         f'# 🥗 Nutrition5K — Dish Nutrition Estimator\n'
         f'Upload **any real-world food photo** to get calories, fat, protein, and carbs.\n\n'
+        f'{p6_note}'
         f'**Active pipeline**: {mode_label.get(pipeline_mode, "unknown")}  \n'
         f'**Food recognition**: {clf_label}'
     )
@@ -448,7 +540,9 @@ with gr.Blocks(title='Nutrition5K Estimator') as demo:
     gr.Markdown(
         '> **Tips**: Works best with a single dish centred in frame.  \n'
         '> Food-101 covers pizza, sushi, ramen, burgers, salads, pasta, tacos, and 94 more categories.  \n'
-        '> For Asian & regional foods train on UECFOOD-256 or iFood-2019 (see notebook 05).'
+        '> For Asian & regional foods train on UECFOOD-256 or iFood-2019 (see notebook 05).  \n'
+        '> **Phase 6**: Train `06_weight_prediction.ipynb` on Kaggle, download '
+        '`best_weight_mlp.pt + nutrition_constants.json + weight_feat_stats.npz`, place in `models/`.'
     )
 
 if __name__ == '__main__':
