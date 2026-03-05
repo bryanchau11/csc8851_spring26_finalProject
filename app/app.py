@@ -53,8 +53,8 @@ device = torch.device('cuda' if torch.cuda.is_available() else
                       'cpu')
 
 
-def _gpu_stats_md(timing: dict | None = None) -> str:
-    """Return a Markdown string with GPU/device info and optional per-stage timing."""
+def _gpu_stats_md(timing=None) -> str:
+    """Return a Markdown string with GPU/device info, per-stage timing, and training history."""
     lines = ['### ⚡ GPU / Compute Stats', '']
 
     # ── Device info ──────────────────────────────────────────────────────────
@@ -88,9 +88,80 @@ def _gpu_stats_md(timing: dict | None = None) -> str:
         '',
     ]
 
+    # ── Training compute history (from training_stats.json saved by notebooks) ─
+    _stats_path = os.path.join(MODELS_DIR, 'training_stats.json')
+    if os.path.isfile(_stats_path):
+        try:
+            with open(_stats_path) as _sf:
+                _ts = json.load(_sf)
+
+            lines += [
+                '---',
+                '',
+                '### 📊 Training Compute History (Kaggle)',
+                '',
+                '| Phase | Model | GPU | Params | Epochs | Best Metric | GPU Train Time |',
+                '|---|---|---|---|---|---|---|',
+            ]
+
+            _phase_order = ['phase3', 'phase4', 'phase5', 'phase6']
+            for _pk in _phase_order:
+                if _pk not in _ts:
+                    continue
+                _p = _ts[_pk]
+                _params_m = (f'{_p["params"]/1e6:.2f}M'
+                             if isinstance(_p.get('params'), (int, float)) else '—')
+                _ep_run = _p.get('epochs_run', '?')
+                _ep_max = _p.get('max_epochs', '?')
+                _epochs = (f'{_ep_run} / {_ep_max}'
+                           if isinstance(_ep_run, int) else f'ckpt / {_ep_max}')
+                # Best metric — phase-specific
+                if _pk == 'phase3':
+                    _mae = _p.get('val_cal_mae_kcal')
+                    _metric = f'Cal MAE = {_mae} kcal' if _mae else f'val_loss = {_p.get("best_val_loss","—")}'
+                elif _pk == 'phase4':
+                    _metric = f'val_loss = {_p.get("best_val_loss","—")}'
+                elif _pk == 'phase5':
+                    _t1 = _p.get('best_val_top1_pct')
+                    _t5 = _p.get('best_val_top5_pct')
+                    _metric = (f'Top-1 = {_t1}%, Top-5 = {_t5}%'
+                               if _t1 else f'val_. = {_p.get("best_val_loss","—")}')
+                else:  # phase6
+                    _mae = _p.get('best_val_mae_g')
+                    _metric = f'Weight MAE = {_mae} g' if _mae else f'Huber = {_p.get("best_val_loss_huber","—")}'
+
+                _gpu     = _p.get('gpu_name', _p.get('device', '—'))
+                _t_hms   = _p.get('train_time_hms', '—')
+                _t_s     = _p.get('train_time_s', 0)
+                _t_str   = f'{_t_hms} ({_t_s:.0f}s)' if isinstance(_t_s, float) and _t_s > 5 else '—'
+                _pname   = _p.get('phase_name', _pk)
+                _model   = _p.get('model', '—')
+                lines.append(
+                    f'| {_pname} | {_model} | {_gpu} | {_params_m} | {_epochs} | {_metric} | {_t_str} |'
+                )
+
+            # Footer with when each phase was trained
+            _dates = [f'**{_pk}**: {_ts[_pk]["trained_at"]}'
+                      for _pk in _phase_order if _pk in _ts and 'trained_at' in _ts[_pk]]
+            if _dates:
+                lines += ['', '_Trained at: ' + ' · '.join(_dates) + '_']
+        except Exception as _e:
+            lines += [f'_Could not parse training_stats.json: {_e}_']
+    else:
+        lines += [
+            '---',
+            '',
+            '### 📊 Training Compute History',
+            '',
+            '_`training_stats.json` not found in `models/`._  ',
+            '_Run each training notebook on Kaggle, then download and place `training_stats.json` in `models/`._',
+        ]
+
+    lines += ['']
+
     # ── Inference timing ─────────────────────────────────────────────────────
     if timing:
-        lines += ['**Inference timing (wall-clock):**', '']
+        lines += ['---', '', '**Inference timing (wall-clock):**', '']
         lines += ['| Stage | Time (ms) |', '|---|---|']
         for stage, ms in timing.items():
             lines.append(f'| {stage} | {ms:.1f} |')
@@ -735,7 +806,7 @@ def predict(image: Image.Image):
         return ('No model checkpoint found. Download best_mlp.pt + mlp_feat_stats.npz '
                 'from Kaggle output and place them in models/.'), None, [], '', _gpu_stats_md()
 
-    _timing: dict[str, float] = {}
+    _timing = {}  # type: dict
     _t0 = time.perf_counter()
 
     if pipeline_mode in ('full', 'phase6', 'phase4'):
