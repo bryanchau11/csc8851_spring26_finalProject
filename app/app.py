@@ -19,7 +19,7 @@ Required files in models/:
     best_model.pt            ← Phase 3 ResNet fallback
 """
 
-import os, json, warnings
+import os, json, warnings, time
 import urllib.request, urllib.parse
 import numpy as np
 import cv2
@@ -51,6 +51,52 @@ MC_SAMPLES    = 30
 device = torch.device('cuda' if torch.cuda.is_available() else
                       'mps'  if torch.backends.mps.is_available() else
                       'cpu')
+
+
+def _gpu_stats_md(timing: dict | None = None) -> str:
+    """Return a Markdown string with GPU/device info and optional per-stage timing."""
+    lines = ['### ⚡ GPU / Compute Stats', '']
+
+    # ── Device info ──────────────────────────────────────────────────────────
+    if torch.cuda.is_available():
+        idx   = torch.cuda.current_device()
+        props = torch.cuda.get_device_properties(idx)
+        total = props.total_memory / 1024**3
+        alloc = torch.cuda.memory_allocated(idx) / 1024**3
+        resvd = torch.cuda.memory_reserved(idx)  / 1024**3
+        free  = total - resvd
+        lines += [
+            f'**Device**: CUDA — {props.name}',
+            f'**CUDA version**: {torch.version.cuda}  ·  '
+            f'**cuDNN**: {torch.backends.cudnn.version()}',
+            f'**VRAM**: {alloc:.2f} GB allocated · {resvd:.2f} GB reserved · '
+            f'{free:.2f} GB free · {total:.2f} GB total',
+            f'**SM count**: {props.multi_processor_count}  ·  '
+            f'**Compute cap**: {props.major}.{props.minor}',
+        ]
+    elif torch.backends.mps.is_available():
+        lines += [
+            '**Device**: Apple Silicon MPS (Metal Performance Shaders)',
+            '_VRAM is shared with system RAM — not separately reported by PyTorch._',
+        ]
+    else:
+        lines += ['**Device**: CPU only (no GPU detected)']
+
+    lines += [
+        '',
+        f'**PyTorch**: {torch.__version__}',
+        '',
+    ]
+
+    # ── Inference timing ─────────────────────────────────────────────────────
+    if timing:
+        lines += ['**Inference timing (wall-clock):**', '']
+        lines += ['| Stage | Time (ms) |', '|---|---|']
+        for stage, ms in timing.items():
+            lines.append(f'| {stage} | {ms:.1f} |')
+
+    return '\n'.join(lines)
+
 
 # ── Food class filtering — built dynamically from YOLO's own class names ───────
 # Keywords that indicate food or food containers; non-food items like
@@ -683,15 +729,20 @@ val_transform = T.Compose([
 
 def predict(image: Image.Image):
     if image is None:
-        return 'Please upload an image.', None, [], ''
+        return 'Please upload an image.', None, [], '', _gpu_stats_md()
 
     if pipeline_mode is None:
         return ('No model checkpoint found. Download best_mlp.pt + mlp_feat_stats.npz '
-                'from Kaggle output and place them in models/.'), None, [], ''
+                'from Kaggle output and place them in models/.'), None, [], '', _gpu_stats_md()
+
+    _timing: dict[str, float] = {}
+    _t0 = time.perf_counter()
 
     if pipeline_mode in ('full', 'phase6', 'phase4'):
         # ── Step 1 (Phase 4/6 shared): YOLO mask + MiDaS depth → 9 features ──────
+        _ts = time.perf_counter()
         feat_raw, items, raw_mask = _extract_features(image)
+        _timing['YOLO seg + MiDaS depth (feature extraction)'] = (time.perf_counter() - _ts) * 1000
         # raw feat_raw is already normalised by Phase 6 stats;
         # for Phase 4 we need its own normalisation
         x6 = torch.tensor(feat_raw, dtype=torch.float32).unsqueeze(0).to(device)
@@ -704,7 +755,9 @@ def predict(image: Image.Image):
             x4 = x6
 
         # ── Step 2 (Phase 5): classify food type ─────────────────────────────────
+        _ts = time.perf_counter()
         food_type_preds = _classify_food_type(image, raw_mask, top_k=3)
+        _timing['EfficientNet-B0 food classification (Phase 5)'] = (time.perf_counter() - _ts) * 1000
         detected_food   = food_type_preds[0][0] if food_type_preds else None
         food_conf       = food_type_preds[0][1] if food_type_preds else None
 
@@ -740,12 +793,14 @@ def predict(image: Image.Image):
                 if isinstance(m, nn.Dropout): m.train()
             torch.manual_seed(42)
             _w_samples = []
+            _ts = time.perf_counter()
             with torch.no_grad():
                 for _ in range(MC_SAMPLES):
                     _raw_s = weight_mlp_model(x6).item()
                     if _weight_log_target:
                         _raw_s = float(np.exp(_raw_s) - _weight_log_offset)
                     _w_samples.append(max(_raw_s, 10.0))   # clamp to 10g
+            _timing[f'WeightMLP MC-Dropout ×{MC_SAMPLES} passes (Phase 6)'] = (time.perf_counter() - _ts) * 1000
             weight_mlp_model.eval()
             w_raw = float(np.mean(_w_samples));  w_std_mc = float(np.std(_w_samples))
 
@@ -918,9 +973,11 @@ def predict(image: Image.Image):
                 if isinstance(m, nn.Dropout): m.train()
             torch.manual_seed(42)
             _p4_mc = []
+            _ts = time.perf_counter()
             with torch.no_grad():
                 for _ in range(MC_SAMPLES):
                     _p4_mc.append(mlp(x4).squeeze(0).cpu().numpy())
+            _timing[f'NutritionMLP MC-Dropout ×{MC_SAMPLES} passes (Phase 4)'] = (time.perf_counter() - _ts) * 1000
             mlp.eval()
             _p4_mc = np.stack(_p4_mc)
             p4_mean = _p4_mc.mean(0)
@@ -966,9 +1023,11 @@ def predict(image: Image.Image):
         # ── Step 6 (Phase 3): ResNet baseline comparison ──────────────────────────
         p3_note = ''
         if p3_model is not None:
+            _ts = time.perf_counter()
             _img_t = val_transform(image.convert('RGB')).unsqueeze(0).to(device)
             with torch.no_grad():
                 _p3_pred = p3_model(_img_t).squeeze(0).cpu().numpy()
+            _timing['ResNet-50 baseline comparison (Phase 3)'] = (time.perf_counter() - _ts) * 1000
             cal_idx3 = next((i for i, c in enumerate(target_cols) if 'cal' in c.lower()), 0)
             p3_note  = f'\n_Phase 3 baseline (ResNet-50): {_p3_pred[cal_idx3]:.0f} kcal_'
 
@@ -1006,17 +1065,22 @@ def predict(image: Image.Image):
                      f'{ensemble_note}{p3_note}')
 
     else:  # phase3 only
+        _ts = time.perf_counter()
         img_t = val_transform(image.convert('RGB')).unsqueeze(0).to(device)
         with torch.no_grad():
             mean_pred = p3_model(img_t).squeeze(0).cpu().numpy()
+        _timing['ResNet-50 direct regression (Phase 3)'] = (time.perf_counter() - _ts) * 1000
         result_json = {col: f'{v:.1f}' for col, v in zip(target_cols, mean_pred)}
         mode_note  = '_Pipeline: ResNet-50 direct regression (Phase 3 baseline)_'
         ingredient_rows = [['N/A (ResNet baseline — no segmentation)', '—', '—', '—']]
         _weight_breakdown_md = '_Weight prediction not available in Phase 3 baseline (ResNet-50 direct regression, no YOLO/MiDaS)._'
 
+    _timing['Total inference (wall-clock)'] = (time.perf_counter() - _t0) * 1000
+    gpu_md = _gpu_stats_md(_timing)
+
     label_txt = '\n'.join([f'{col}: {result_json[col]}' for col in target_cols])
     label_txt += f'\n\n{mode_note}\n> Units: kcal for calories, grams for macros'
-    return label_txt, result_json, ingredient_rows, _weight_breakdown_md
+    return label_txt, result_json, ingredient_rows, _weight_breakdown_md, gpu_md
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1063,10 +1127,13 @@ with gr.Blocks(title='Nutrition5K Estimator') as demo:
             value='_Run a prediction to see the weight breakdown._'
         )
 
+    with gr.Accordion('⚡ GPU / Compute Stats', open=False):
+        gpu_stats_out = gr.Markdown(value=_gpu_stats_md())
+
     predict_btn = gr.Button('Predict 🔍', variant='primary')
     predict_btn.click(
         fn=predict, inputs=img_input,
-        outputs=[text_out, json_out, ingredient_table, weight_detail_out]
+        outputs=[text_out, json_out, ingredient_table, weight_detail_out, gpu_stats_out]
     )
 
     gr.Markdown(
