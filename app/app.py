@@ -47,6 +47,12 @@ FOOD_CLF_LBLS = os.path.join(MODELS_DIR, 'food101_labels.json')
 IMG_SIZE      = 224
 MC_SAMPLES    = 30
 
+# If True, use the hand-authored FOOD_NUTRITION_DB to override per-gram macros
+# (kcal/g, fat/g, etc.) and typical serving sizes for known foods.
+# The project proposal/spec uses dataset-derived constants + predicted weight,
+# so keep this disabled by default.
+USE_FOOD_NUTRITION_DB = False
+
 device = torch.device('cuda' if torch.cuda.is_available() else
                       'mps'  if torch.backends.mps.is_available() else
                       'cpu')
@@ -629,7 +635,7 @@ def predict(image: Image.Image):
             # the food-specific typical serving size in the DB as fallback.
             _db_entry     = None
             _food_scale_note = ''
-            if detected_food and food_conf and food_conf >= 0.40:
+            if USE_FOOD_NUTRITION_DB and detected_food and food_conf and food_conf >= 0.40:
                 _fkey = _food_name_to_key(detected_food)
                 _db_entry = FOOD_NUTRITION_DB.get(_fkey)
                 if _db_entry is None:
@@ -638,20 +644,17 @@ def predict(image: Image.Image):
                         if any(p in k for p in _fkey.split('_') if len(p) > 4):
                             _db_entry = FOOD_NUTRITION_DB[k]; break
 
-            # Decide portion weight: WeightMLP if confident, else DB serving size,
-            # else Nutrition5K dataset mean (280g)
+            # Decide portion weight: WeightMLP if confident, else Nutrition5K dataset mean (280g)
+            # (Project proposal behavior: no hardcoded per-food serving sizes.)
             if _used_fallback:
-                if _db_entry is not None:
-                    w_mean = float(_db_entry[4])   # typical serving size from DB
-                else:
-                    w_mean = DATASET_MEAN_WEIGHT
+                w_mean = DATASET_MEAN_WEIGHT
             else:
                 w_mean = max(w_raw, MIN_WEIGHT)
 
             # Build per-target nutrition from DB (all 4 macros) or fall back to
             # global constants scaled by kcal ratio (old behaviour)
             const_keys = list(nutrition_constants.keys())
-            if _db_entry is not None:
+            if USE_FOOD_NUTRITION_DB and _db_entry is not None:
                 # Full DB lookup: each macro has its own per-gram value
                 # DB tuple: (kcal/g, fat/g, protein/g, carb/g, serving_g)
                 _db_kcal, _db_fat, _db_pro, _db_carb, _db_srv = _db_entry
@@ -677,7 +680,7 @@ def predict(image: Image.Image):
 
             p6_mean = np.array([w_mean * active_constants[k] for k in const_keys], dtype=np.float32)
             p6_std  = np.array([w_std_mc * active_constants[k] for k in const_keys], dtype=np.float32)
-            _src = 'DB serving' if (_used_fallback and _db_entry) else ('fallback' if _used_fallback else 'WeightMLP')
+            _src = 'fallback' if _used_fallback else 'WeightMLP'
             _weight_note = f'**{w_mean:.0f}±{w_std_mc*2:.0f}g** ({_src}){_food_scale_note}'
 
         # ── Step 4 (Phase 4): direct regression via MLP ───────────────────────────
