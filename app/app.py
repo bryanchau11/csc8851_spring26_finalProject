@@ -929,8 +929,8 @@ def predict(image: Image.Image):
             # global constants scaled by kcal ratio (old behaviour)
             const_keys = list(nutrition_constants.keys())
             if _db_entry is not None:
-                # Full DB lookup: each macro has its own per-gram value
-                # DB tuple: (kcal/g, fat/g, protein/g, carb/g, serving_g)
+                # USDA lookup: each macro has its own per-gram value
+                # USDA tuple: (kcal/g, fat/g, protein/g, carb/g, serving_g)
                 _db_kcal, _db_fat, _db_pro, _db_carb, _db_srv = _db_entry
                 _db_macro_per_g = {
                     'calories': _db_kcal,
@@ -944,7 +944,7 @@ def predict(image: Image.Image):
                        nutrition_constants[k])
                     for k in const_keys
                 }
-                _food_scale_note = (f' · DB: {_db_kcal:.2f} kcal/g, '
+                _food_scale_note = (f' · USDA: {_db_kcal:.2f} kcal/g, '
                                     f'{_db_fat:.3f} fat/g, '
                                     f'{_db_pro:.3f} pro/g, '
                                     f'{_db_carb:.3f} carb/g')
