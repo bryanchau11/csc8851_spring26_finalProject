@@ -29,6 +29,12 @@ import torch.nn.functional as F
 import torchvision.models as tv_models
 import torchvision.transforms as T
 from PIL import Image
+
+# Optional: CLIP for zero-shot multi-item labeling (no training)
+try:
+    import open_clip  # type: ignore
+except Exception:
+    open_clip = None
 import gradio as gr
 warnings.filterwarnings('ignore')
 
@@ -367,7 +373,9 @@ def _lookup_usda(food_name: str):
 
         # Serving size: use USDA value only if it looks like a real meal portion;
         # otherwise ask _restaurant_serving_g for a sensible default.
-        if srv < 150:
+        # Note: many USDA entries are per-item / lab sample; for real-world
+        # photos we bias toward restaurant portions.
+        if srv < 200:
             srv = _restaurant_serving_g(cache_key)
 
         entry = (kcal_g, fat_g, prot_g, carb_g, srv)
@@ -484,6 +492,7 @@ class FoodClassifier(nn.Module):
 pipeline_mode = None   # 'full', 'phase6', 'phase4', or 'phase3'
                        # 'full' = Phase 6 + Phase 4 + Phase 5 all running together
 mlp = weight_mlp_model = yolo_model = midas_model = midas_transform = None
+ingredient_yolo_model = None
 _weight_log_target = False   # True when checkpoint was trained on log(w+1)
 _weight_log_offset = 1.0    # additive offset used in log transform
 p3_model = None
@@ -497,6 +506,25 @@ target_cols = ['calories', 'fat', 'protein', 'carbs']
 # Phase 5 food classifier (optional — loaded if checkpoint exists)
 food_clf        = None
 food_clf_labels = []   # list[str] index → class name
+
+# Zero-shot label set for multi-item listing (covers common sides/condiments)
+ZERO_SHOT_FOOD_LABELS = [
+    'hamburger', 'cheeseburger', 'sandwich', 'hot dog', 'pizza',
+    'french fries', 'onion rings',
+    'salad', 'soup',
+    'ketchup', 'mayonnaise', 'mustard', 'barbecue sauce', 'dipping sauce',
+    'fried chicken', 'chicken wings',
+    'taco', 'burrito',
+    'sushi',
+    'cake', 'donut', 'ice cream',
+    'apple', 'banana', 'orange',
+]
+
+clip_model = None
+clip_preprocess = None
+clip_tokenizer = None
+clip_text_features = None
+clip_labels = None
 
 # ── Load YOLO + MiDaS (shared by Phase 4 and 6) ──────────────────────────────
 _geo_models_loaded = False
@@ -512,6 +540,52 @@ try:
     print(f'✓ YOLO + MiDaS loaded')
 except Exception as _e:
     print(f'⚠ YOLO/MiDaS load failed ({_e})')
+
+
+def _find_ingredient_seg_weights():
+    """Find a likely ingredient/component YOLOv8-seg weight file under models/.
+
+    We avoid hardcoding a single filename so the user can drop in the Kaggle
+    output without renaming.
+    """
+    models_dir = os.path.join(os.path.dirname(__file__), '..', 'models')
+    models_dir = os.path.abspath(models_dir)
+    if not os.path.isdir(models_dir):
+        return None
+    candidates = []
+    for fn in os.listdir(models_dir):
+        if not fn.lower().endswith('.pt'):
+            continue
+        key = fn.lower()
+        # Heuristic: prefer files that look like ingredient segmentation exports
+        score = 0
+        if 'ingredient' in key:
+            score += 3
+        if 'seg' in key or 'segment' in key:
+            score += 2
+        if 'yolo' in key or 'yolov8' in key:
+            score += 1
+        if score <= 0:
+            continue
+        candidates.append((score, os.path.join(models_dir, fn)))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda t: (t[0], os.path.getmtime(t[1])), reverse=True)
+    return candidates[0][1]
+
+
+_ingredient_ckpt = None
+try:
+    if _geo_models_loaded:
+        _ingredient_ckpt = _find_ingredient_seg_weights()
+        if _ingredient_ckpt:
+            ingredient_yolo_model = _YOLO(_ingredient_ckpt)
+            print(f'✓ Ingredient seg model loaded: {os.path.basename(_ingredient_ckpt)}')
+        else:
+            print('ℹ No ingredient-seg weights found under models/ (optional)')
+except Exception as _e:
+    ingredient_yolo_model = None
+    print(f'ℹ Ingredient seg model not available ({_e})')
 
 # ── Load Phase 6 (weight-first) ───────────────────────────────────────────────
 _p6_loaded = False
@@ -617,6 +691,48 @@ else:
 
 # Load USDA cache from disk so first predictions are instant
 _load_usda_cache()
+
+
+def _try_load_clip():
+    """Best-effort load for CLIP zero-shot classifier.
+    Keeps the app runnable if open_clip isn't installed."""
+    global clip_model, clip_preprocess, clip_tokenizer, clip_text_features, clip_labels
+    if open_clip is None or clip_model is not None:
+        return
+    try:
+        clip_model, _, clip_preprocess = open_clip.create_model_and_transforms(
+            'ViT-B-32', pretrained='laion2b_s34b_b79k'
+        )
+        clip_model = clip_model.to(device).eval()
+        clip_tokenizer = open_clip.get_tokenizer('ViT-B-32')
+
+        # Combine Food-101 class names with extra labels (dedupe)
+        labels = []
+        for x in (food_clf_labels or []):
+            labels.append(x.replace('_', ' '))
+        labels += ZERO_SHOT_FOOD_LABELS
+        seen = set()
+        clip_labels = []
+        for lab in labels:
+            k = lab.strip().lower()
+            if not k or k in seen:
+                continue
+            seen.add(k)
+            clip_labels.append(k)
+
+        with torch.no_grad():
+            text = clip_tokenizer([f'a photo of {l}' for l in clip_labels]).to(device)
+            tf = clip_model.encode_text(text)
+            tf = tf / tf.norm(dim=-1, keepdim=True)
+            clip_text_features = tf
+        print(f'✓ CLIP loaded for zero-shot item labels ({len(clip_labels)} labels)')
+    except Exception as _e:
+        clip_model = None
+        clip_preprocess = None
+        clip_tokenizer = None
+        clip_text_features = None
+        clip_labels = None
+        print(f'ℹ CLIP not available ({_e}) — multi-item labels limited to Food-101')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -752,6 +868,210 @@ def _classify_food_type(pil_img: Image.Image, mask: np.ndarray, top_k: int = 3):
     ]
 
 
+def _classify_crop_food101(crop: Image.Image, top_k: int = 1):
+    """Classify a cropped region using the Food-101 classifier.
+    Returns list of (display_name, confidence_float) best-first.
+    """
+    if food_clf is None or not food_clf_labels:
+        return []
+
+    _clf_transform = T.Compose([
+        T.Resize(256), T.CenterCrop(224), T.ToTensor(),
+        T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+    ])
+    x = _clf_transform(crop.convert('RGB')).unsqueeze(0).to(device)
+    food_clf.eval()
+    with torch.no_grad():
+        logits = food_clf(x).squeeze(0)
+    probs = F.softmax(logits, dim=0).cpu().numpy()
+    topk_i = probs.argsort()[-top_k:][::-1]
+    return [
+        (food_clf_labels[int(i)].replace('_', ' ').title(), float(probs[int(i)]))
+        for i in topk_i
+    ]
+
+
+def _detect_and_classify_items(pil_img: Image.Image,
+                               max_regions: int = 8,
+                               min_area: float = 0.01,
+                               min_conf: float = 0.25):
+    """Use pretrained YOLO instance masks as region proposals, then classify each
+    region with Food-101 to get a multi-item list.
+
+    Returns list[dict{name, conf, area}] sorted by area desc.
+    """
+    if yolo_model is None:
+        return []
+
+    img_rgb = np.array(pil_img.convert('RGB'))
+    img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+    H, W = img_bgr.shape[:2]
+
+    results = yolo_model(img_bgr, verbose=False)[0]
+    if results.masks is None or len(results.masks) == 0:
+        return []
+
+    classes = results.boxes.cls.cpu().numpy().astype(int)
+    confs = results.boxes.conf.cpu().numpy()
+
+    # Reuse the same skip list as mask-building so we avoid people/vehicles/etc.
+    _SKIP_CLASSES = {
+        'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train',
+        'truck', 'boat', 'traffic light', 'fire hydrant', 'stop sign',
+        'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep',
+        'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella',
+        'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard',
+        'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard',
+        'surfboard', 'tennis racket', 'chair', 'couch', 'bed', 'toilet', 'tv',
+        'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 'microwave',
+        'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase',
+        'scissors', 'teddy bear', 'hair drier', 'toothbrush',
+    }
+
+    candidates = []
+    for i in range(len(classes)):
+        name = yolo_model.names.get(int(classes[i]), '').lower()
+        if name in _SKIP_CLASSES:
+            continue
+        m = cv2.resize(results.masks[i].data[0].cpu().numpy(), (W, H))
+        m_bin = (m > 0.5)
+        area = float(m_bin.mean())
+        if area < min_area:
+            continue
+        candidates.append((i, float(confs[i]), area, m_bin))
+
+    if not candidates:
+        return []
+
+    # Prefer confident + large regions first
+    candidates.sort(key=lambda t: (t[1], t[2]), reverse=True)
+    candidates = candidates[:max_regions]
+
+    # Best-effort CLIP load (no training) for labels like fries/sauces
+    _try_load_clip()
+
+    def _classify_crop(c: Image.Image):
+        """Return (label, confidence) for a crop."""
+        if clip_model is not None and clip_preprocess is not None and clip_text_features is not None and clip_labels:
+            try:
+                img_t = clip_preprocess(c.convert('RGB')).unsqueeze(0).to(device)
+                with torch.no_grad():
+                    imf = clip_model.encode_image(img_t)
+                    imf = imf / imf.norm(dim=-1, keepdim=True)
+                    logits = (imf @ clip_text_features.T).squeeze(0)
+                    probs = logits.softmax(dim=0).detach().cpu().numpy()
+                j = int(probs.argmax())
+                return clip_labels[j].title(), float(probs[j])
+            except Exception:
+                pass
+        preds = _classify_crop_food101(c, top_k=1)
+        if not preds:
+            return None, 0.0
+        return preds[0][0], float(preds[0][1])
+
+    items = []
+    for _, yconf, area, m_bin in candidates:
+        ys, xs = np.where(m_bin)
+        if len(ys) == 0:
+            continue
+        y0, y1 = int(ys.min()), int(ys.max())
+        x0, x1 = int(xs.min()), int(xs.max())
+        pad_y = max(4, int((y1 - y0) * 0.08))
+        pad_x = max(4, int((x1 - x0) * 0.08))
+        y0 = max(0, y0 - pad_y); y1 = min(H, y1 + pad_y)
+        x0 = max(0, x0 - pad_x); x1 = min(W, x1 + pad_x)
+        crop = pil_img.crop((x0, y0, x1, y1))
+
+        label, p = _classify_crop(crop)
+        if not label:
+            continue
+        if p < min_conf:
+            continue
+        items.append({'name': label, 'conf': float(p), 'area': float(area)})
+
+    if not items:
+        return []
+
+    # Merge duplicate labels by summing area and keeping max confidence
+    merged = {}
+    for it in items:
+        k = it['name']
+        if k not in merged:
+            merged[k] = dict(it)
+        else:
+            merged[k]['area'] += float(it.get('area', 0.0))
+            merged[k]['conf'] = max(float(merged[k].get('conf', 0.0)), float(it.get('conf', 0.0)))
+
+    out = list(merged.values())
+    out.sort(key=lambda x: x.get('area', 0.0), reverse=True)
+    return out
+
+
+def _detect_ingredient_components(pil_img: Image.Image,
+                                 max_items: int = 12,
+                                 min_conf: float = 0.25,
+                                 min_area: float = 0.003):
+    """Detect ingredient/component instances using a fine-tuned YOLOv8-seg model.
+
+    Returns list[dict{name, conf, area}] sorted by area desc.
+    - `area` is fraction of image pixels covered by the instance mask.
+    """
+    if ingredient_yolo_model is None:
+        return []
+
+    img_rgb = np.array(pil_img.convert('RGB'))
+    img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+    H, W = img_bgr.shape[:2]
+
+    try:
+        results = ingredient_yolo_model(img_bgr, verbose=False)[0]
+    except Exception:
+        return []
+
+    if results.masks is None or len(results.masks) == 0:
+        return []
+
+    classes = results.boxes.cls.cpu().numpy().astype(int)
+    confs = results.boxes.conf.cpu().numpy()
+
+    items = []
+    for i in range(len(classes)):
+        c = int(classes[i])
+        p = float(confs[i])
+        if p < min_conf:
+            continue
+
+        m = results.masks[i].data[0].cpu().numpy()
+        m = cv2.resize(m, (W, H))
+        m_bin = (m > 0.5)
+        area = float(m_bin.mean())
+        if area < min_area:
+            continue
+
+        name = ingredient_yolo_model.names.get(c, str(c))
+        name = name.replace('_', ' ').replace('-', ' ').strip().title()
+        if not name:
+            name = str(c)
+        items.append({'name': name, 'conf': p, 'area': area})
+
+    if not items:
+        return []
+
+    # Merge duplicates by label
+    merged = {}
+    for it in items:
+        k = it['name']
+        if k not in merged:
+            merged[k] = dict(it)
+        else:
+            merged[k]['area'] += float(it.get('area', 0.0))
+            merged[k]['conf'] = max(float(merged[k].get('conf', 0.0)), float(it.get('conf', 0.0)))
+
+    out = list(merged.values())
+    out.sort(key=lambda x: x.get('area', 0.0), reverse=True)
+    return out[:max_items]
+
+
 def _get_depth_map(pil_img: Image.Image) -> np.ndarray:
     if midas_model is None:
         return np.full((IMG_SIZE, IMG_SIZE), 0.5, dtype=np.float32)
@@ -832,6 +1152,16 @@ def predict(image: Image.Image):
         detected_food   = food_type_preds[0][0] if food_type_preds else None
         food_conf       = food_type_preds[0][1] if food_type_preds else None
 
+        # Multi-item list (YOLO region proposals + Food-101 classification per region)
+        _ts = time.perf_counter()
+        item_foods = _detect_and_classify_items(image)
+        _timing['Multi-item Food-101 (YOLO regions)'] = (time.perf_counter() - _ts) * 1000
+
+        # Ingredient/component segmentation list (optional, if weights present)
+        _ts = time.perf_counter()
+        ingredient_items = _detect_ingredient_components(image)
+        _timing['Ingredient instance-seg (optional)'] = (time.perf_counter() - _ts) * 1000
+
         # ── YOLO-name fallback for foods absent from Food-101 ─────────────────
         # Food-101 has no plain fruit categories (apple, banana, orange, grape…).
         # When EfficientNet confidence is low AND YOLO directly detected a known
@@ -851,6 +1181,11 @@ def predict(image: Image.Image):
             if _yolo_food:
                 detected_food = _yolo_food['name']   # e.g. 'Banana', 'Apple'
                 food_conf     = _yolo_food['conf']   # YOLO detection confidence
+
+        # If we have multi-item labels but no main dish label, pick the largest item.
+        if detected_food is None and item_foods:
+            detected_food = item_foods[0]['name']
+            food_conf = float(item_foods[0].get('conf', 0.0))
 
         # ── Step 3 (Phase 6): predict weight → × food-specific constants ─────────
         p6_mean = p6_std = None
@@ -874,6 +1209,11 @@ def predict(image: Image.Image):
             _timing[f'WeightMLP MC-Dropout ×{MC_SAMPLES} passes (Phase 6)'] = (time.perf_counter() - _ts) * 1000
             weight_mlp_model.eval()
             w_raw = float(np.mean(_w_samples));  w_std_mc = float(np.std(_w_samples))
+
+            # Un-normalised features (for heuristics + UI explanation)
+            _feat_unnorm = None
+            if feat_mean is not None and feat_std is not None:
+                _feat_unnorm = (feat_raw * feat_std.flatten() + feat_mean.flatten())
 
             DATASET_MEAN_WEIGHT = 280.0
             MIN_WEIGHT          = 50.0
@@ -903,21 +1243,38 @@ def predict(image: Image.Image):
             # Hard-floor fallback (no USDA) stays intact as the last resort.
 
             _usda_serving = float(_db_entry[4]) if _db_entry is not None else None
+            # If USDA is unavailable (no API key / lookup miss), still anchor to a
+            # plausible meal portion when we have a detected food type.
+            _anchor_serving = (
+                _usda_serving
+                if _usda_serving is not None
+                else (_restaurant_serving_g(detected_food) if detected_food else None)
+            )
             _cv_fallback  = (w_std_mc > abs(w_raw) and w_raw < DATASET_MEAN_WEIGHT)
 
             if w_raw < MIN_WEIGHT or _cv_fallback:
                 # MLP output is completely unreliable — ignore it
                 _used_fallback = True
-                if _db_entry is not None:
-                    w_mean = _usda_serving
+                if _anchor_serving is not None:
+                    w_mean = float(_anchor_serving)
                     _scale_factor = 1.0
                 else:
-                    w_mean = _restaurant_serving_g(detected_food or '')
+                    w_mean = DATASET_MEAN_WEIGHT
                     _scale_factor = 1.0
-            elif _db_entry is not None:
-                # USDA anchor + MLP relative scale (the preferred path)
-                _scale_factor = float(np.clip(w_raw / DATASET_MEAN_WEIGHT, 0.4, 2.5))
-                w_mean = _usda_serving * _scale_factor
+            elif _anchor_serving is not None:
+                # Anchor (USDA if available, else restaurant default) + relative scale.
+                # We blend two weak scale cues:
+                #   1) WeightMLP raw / dataset mean (learned, but domain-shifts on phone photos)
+                #   2) Mask area vs dataset mean mask area (simple geometry cue)
+                # Geometric mean is a conservative blend.
+                _mlp_scale  = float(w_raw / DATASET_MEAN_WEIGHT)
+                _area_raw   = float(_feat_unnorm[0]) if _feat_unnorm is not None else None
+                _area_scale = (float(_area_raw / float(feat_mean.flatten()[0]))
+                               if (_area_raw is not None and feat_mean is not None)
+                               else 1.0)
+                _area_scale = float(np.clip(_area_scale, 0.6, 1.8))
+                _scale_factor = float(np.clip(np.sqrt(max(_mlp_scale, 1e-6) * _area_scale), 0.4, 2.5))
+                w_mean = float(_anchor_serving) * _scale_factor
                 _used_fallback = False
             else:
                 # No USDA entry at all — use raw MLP (last resort)
@@ -955,11 +1312,13 @@ def predict(image: Image.Image):
             p6_mean = np.array([w_mean * active_constants[k] for k in const_keys], dtype=np.float32)
             p6_std  = np.array([w_std_mc * active_constants[k] for k in const_keys], dtype=np.float32)
             if _used_fallback:
-                _src = 'USDA serving (MLP unreliable)'
+                _src = 'Serving anchor (MLP unreliable)'
             elif _db_entry is not None:
-                _src = f'USDA×{_scale_factor:.2f} (MLP scale)'
+                _src = f'USDA×{_scale_factor:.2f} (blended scale)'
+            elif detected_food:
+                _src = f'Restaurant×{_scale_factor:.2f} (blended scale)'
             else:
-                _src = 'WeightMLP (no USDA)'
+                _src = 'WeightMLP (no anchor)'
             _weight_note = f'**{w_mean:.0f}±{w_std_mc*2:.0f}g** ({_src}){_food_scale_note}'
 
             # ── Build weight breakdown explanation for UI display ───────────────────────
@@ -998,13 +1357,23 @@ def predict(image: Image.Image):
             elif _db_entry is not None:
                 _step3_txt = (
                     f'✔️ **USDA-anchored scale**: USDA serving {_usda_serving:.0f} g '
-                    f'× MLP scale {_scale_factor:.2f} '
-                    f'(= {w_raw:.0f} g ÷ {DATASET_MEAN_WEIGHT:.0f} g dataset mean, '
-                    f'clipped to [0.4, 2.5])  \n'
+                    f'× blended scale {_scale_factor:.2f}  \n'
+                    f'- MLP scale: {w_raw:.0f} g ÷ {DATASET_MEAN_WEIGHT:.0f} g = {_mlp_scale:.2f}  \n'
+                    f'- Mask-area scale (vs dataset mean): {_area_scale:.2f}  \n'
+                    f'- Final: sqrt(MLP × area), clipped to [0.4, 2.5]  \n'
+                    f'→ **{w_mean:.0f} g**'
+                )
+            elif detected_food and _anchor_serving is not None:
+                _step3_txt = (
+                    f'✔️ **Restaurant-anchored scale**: restaurant serving {_anchor_serving:.0f} g '
+                    f'× blended scale {_scale_factor:.2f}  \n'
+                    f'- MLP scale: {w_raw:.0f} g ÷ {DATASET_MEAN_WEIGHT:.0f} g = {_mlp_scale:.2f}  \n'
+                    f'- Mask-area scale (vs dataset mean): {_area_scale:.2f}  \n'
+                    f'- Final: sqrt(MLP × area), clipped to [0.4, 2.5]  \n'
                     f'→ **{w_mean:.0f} g**'
                 )
             else:
-                _step3_txt = (f'✔️ **WeightMLP raw** (no USDA entry) — {w_mean:.0f} g')
+                _step3_txt = (f'✔️ **WeightMLP raw** (no anchor) — {w_mean:.0f} g')
 
             # Per-macro calorie equation rows
             _density_src = (f'USDA "{_food_name_to_key(detected_food)}"'
@@ -1025,8 +1394,9 @@ def predict(image: Image.Image):
                 f'- 95% credible interval: [{_w_lo:.0f} g — {_w_hi:.0f} g]  \n'
                 f'- Architecture: Linear(9→128) → BN → ReLU → Dropout ×3 → Linear(32→1)  \n'
                 f'- ⚠️ MiDaS depth is **relative** (0–1), so raw grams are unreliable.  \n'
-                f'  MLP output is used as a **scale factor** on the USDA serving anchor:  \n'
-                f'  `w_final = w_USDA × clip(w_MLP / 280, 0.4, 2.5)`\n\n'
+                f'  MLP output is used as a **relative scale cue** on a serving anchor (USDA if available, else restaurant default), blended with mask-area:  \n'
+                f'  `scale = sqrt((w_MLP/280) × (mask_area/mask_area_mean))` then clip [0.4, 2.5]  \n'
+                f'  `w_final = w_anchor × scale`\n\n'
                 f'**Step 3 — Serving-size decision**:  \n{_step3_txt}  \n'
                 f'**Final weight used: {w_mean:.0f} g**\n\n'
                 f'**Step 4 — Nutrition equation** (density source: {_density_src}):  \n'
@@ -1109,22 +1479,73 @@ def predict(image: Image.Image):
         # Format weight string for the table: "250 g" or "250±66 g"
         _w_str = f'{w_mean:.0f}±{w_std_mc*2:.0f} g' if w_mean else '—'
 
+        # Prefer multi-item classification list for breakdown; fall back to YOLO-only
+        items_for_breakdown = ingredient_items if ingredient_items else (item_foods if item_foods else items)
+
         if detected_food:
-            # Food classifier identified the dish — collapse all YOLO segments
-            # into a single row for the whole dish.  Showing one row per YOLO
-            # mask segment is misleading (they all say the same food name and
-            # the per-segment calorie split has no nutritional meaning).
+            # Dish-level label (Food-101 classifier is single-label).
             ingredient_rows = [[detected_food, _w_str, f"{total_cal:.0f}", f"{food_conf*100:.0f}%"]]
             for alt_name, alt_conf in (food_type_preds[1:3] if food_type_preds else []):
                 ingredient_rows.append([f'  (alt) {alt_name}', '—', '—', f"{alt_conf*100:.0f}%"])
-        elif items:
-            # No food classification — show each YOLO segment with its own name
-            total_area = sum(it['area'] for it in items) or 1.0
+
+            # If we have ingredient/component segmentation, compute a nutrition
+            # breakdown using USDA per-ingredient densities.
+            # To guarantee the row calories sum to the displayed total calories,
+            # we compute raw per-ingredient calories and then rescale.
+            if items_for_breakdown:
+                total_area = float(sum(it.get('area', 0.0) for it in items_for_breakdown) or 1.0)
+
+                # Compute raw per-ingredient calories
+                raw_rows = []
+                raw_sum = 0.0
+                for it in sorted(items_for_breakdown, key=lambda x: x.get('area', 0.0), reverse=True):
+                    name = str(it.get('name', 'Item')).strip()
+                    if name.strip().lower() == detected_food.strip().lower():
+                        continue
+                    frac = float(it.get('area', 0.0)) / total_area
+                    conf_str = f"{it.get('conf', 0.0)*100:.0f}%"
+
+                    # Allocate grams by area if weight is available.
+                    grams = float(w_mean * frac) if w_mean else None
+
+                    kcal_per_g = None
+                    if name:
+                        _entry = _lookup_usda(_food_name_to_key(name))
+                        if _entry is not None:
+                            kcal_per_g = float(_entry[0])
+
+                    if grams is not None and kcal_per_g is not None:
+                        cal_raw = float(grams * kcal_per_g)
+                    else:
+                        # No weight or no USDA density — fall back to area-only split
+                        # so we can still provide a consistent breakdown.
+                        cal_raw = float(total_cal * frac)
+
+                    raw_rows.append((name, grams, conf_str, cal_raw))
+                    raw_sum += float(cal_raw)
+
+                # Rescale so sum(rows) == total_cal
+                scale = float(total_cal / raw_sum) if raw_sum > 1e-6 else 1.0
+
+                for (name, grams, conf_str, cal_raw) in raw_rows:
+                    item_w_str = f"{grams:.0f} g" if grams is not None else '—'
+                    ingredient_rows.append([
+                        f"• {name}",
+                        item_w_str,
+                        f"{(cal_raw * scale):.0f}",
+                        conf_str,
+                    ])
+
+        elif items_for_breakdown:
+            # No dish classification — show each YOLO food item.
+            total_area = float(sum(it.get('area', 0.0) for it in items_for_breakdown) or 1.0)
             ingredient_rows = []
-            for it in items:
-                frac = it['area'] / total_area
-                conf_str = f"{it['conf']*100:.0f}%"
-                ingredient_rows.append([it['name'], _w_str, f"{total_cal * frac:.0f}", conf_str])
+            for it in sorted(items_for_breakdown, key=lambda x: x.get('area', 0.0), reverse=True):
+                frac = float(it.get('area', 0.0)) / total_area
+                conf_str = f"{it.get('conf', 0.0)*100:.0f}%"
+                item_w_str = f"{(w_mean * frac):.0f} g" if w_mean else _w_str
+                ingredient_rows.append([it.get('name', 'Item'), item_w_str, f"{total_cal * frac:.0f}", conf_str])
+
         else:
             ingredient_rows = [['Unknown dish', _w_str, f"{total_cal:.0f}", '—']]
 
@@ -1185,11 +1606,11 @@ with gr.Blocks(title='Nutrition5K Estimator') as demo:
             text_out = gr.Markdown(label='Nutrition Prediction')
             json_out = gr.JSON(label='Raw values')
 
-    gr.Markdown('### 🍽 Detected Food Type & Calorie Breakdown')
+    gr.Markdown('### 🍽 Detected Dish Type & Calorie Breakdown')
     ingredient_table = gr.Dataframe(
-        headers=['Detected Food / Ingredient', 'Predicted Weight', 'Est. Calories (kcal)', 'Confidence'],
+        headers=['Detected Dish', 'Predicted Weight', 'Est. Calories (kcal)', 'Confidence'],
         datatype=['str', 'str', 'str', 'str'],
-        label='Phase 5 food classifier (101 Food-101 classes) + YOLO segmentation',
+        label='Phase 5 dish classifier (Food-101, single-label) + YOLO segmentation',
         interactive=False,
     )
 
