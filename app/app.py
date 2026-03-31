@@ -51,64 +51,12 @@ P3_CKPT       = os.path.join(MODELS_DIR, 'best_model.pt')
 # Phase 5 — food classifier (optional, adds food-type label)
 FOOD_CLF_CKPT = os.path.join(MODELS_DIR, 'best_food_classifier.pt')
 FOOD_CLF_LBLS = os.path.join(MODELS_DIR, 'food101_labels.json')
-ING_LBLS_JSON = os.path.join(MODELS_DIR, 'ingredient_labels.json')
 IMG_SIZE      = 224
 MC_SAMPLES    = 30
-
-# If the dish classifier is unsure, don’t present a confidently-wrong label.
-DISH_LABEL_MIN_CONF = 0.35
 
 device = torch.device('cuda' if torch.cuda.is_available() else
                       'mps'  if torch.backends.mps.is_available() else
                       'cpu')
-
-
-def _load_ingredient_labels():
-    """Load optional ingredient/component label mapping.
-
-    Expected format in models/ingredient_labels.json:
-      {"0": "rice", "1": "egg", ...}
-    or
-      ["rice", "egg", ...]  (index = class id)
-    """
-    if not os.path.isfile(ING_LBLS_JSON):
-        return None
-    try:
-        with open(ING_LBLS_JSON) as f:
-            obj = json.load(f)
-
-        if isinstance(obj, list):
-            return {int(i): str(v) for i, v in enumerate(obj)}
-        if isinstance(obj, dict):
-            out = {}
-            for k, v in obj.items():
-                try:
-                    out[int(k)] = str(v)
-                except Exception:
-                    continue
-            return out or None
-        return None
-    except Exception:
-        return None
-
-
-INGREDIENT_LABELS = _load_ingredient_labels()
-
-
-def _ingredient_labels_are_numeric(labels) -> bool:
-    if not labels:
-        return True
-    try:
-        # Sample a few values; if they're all just digits, mapping is a no-op.
-        vals = list(labels.values())
-        if not vals:
-            return True
-        for v in vals[: min(25, len(vals))]:
-            if not str(v).strip().isdigit():
-                return False
-        return True
-    except Exception:
-        return True
 
 
 def _gpu_stats_md(timing=None) -> str:
@@ -639,18 +587,6 @@ except Exception as _e:
     ingredient_yolo_model = None
     print(f'ℹ Ingredient seg model not available ({_e})')
 
-ING_SEG_LABEL = (
-    f'✅ {os.path.basename(_ingredient_ckpt)}'
-    if ingredient_yolo_model is not None and _ingredient_ckpt
-    else '⚠ Not loaded (add models/best_ingredient_yolov8_seg.pt)'
-)
-
-if ingredient_yolo_model is not None and ingredient_yolo_model.names:
-    _some_name = str(next(iter(ingredient_yolo_model.names.values()))).strip()
-    _labels_missing_or_bad = (not INGREDIENT_LABELS) or _ingredient_labels_are_numeric(INGREDIENT_LABELS)
-    if (_some_name.isdigit() or _some_name in {'0', '1'}) and _labels_missing_or_bad:
-        ING_SEG_LABEL = f'⚠ Loaded, but labels are numeric (add models/ingredient_labels.json)'
-
 # ── Load Phase 6 (weight-first) ───────────────────────────────────────────────
 _p6_loaded = False
 if _geo_models_loaded and os.path.isfile(P6_CKPT) and os.path.isfile(P6_CONST) and os.path.isfile(P6_STATS):
@@ -1072,9 +1008,9 @@ def _detect_and_classify_items(pil_img: Image.Image,
 
 
 def _detect_ingredient_components(pil_img: Image.Image,
-                                 max_items: int = 18,
-                                 min_conf: float = 0.15,
-                                 min_area: float = 0.001):
+                                 max_items: int = 12,
+                                 min_conf: float = 0.25,
+                                 min_area: float = 0.003):
     """Detect ingredient/component instances using a fine-tuned YOLOv8-seg model.
 
     Returns list[dict{name, conf, area}] sorted by area desc.
@@ -1087,18 +1023,10 @@ def _detect_ingredient_components(pil_img: Image.Image,
     img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
     H, W = img_bgr.shape[:2]
 
-    # Important: Ultralytics applies a confidence filter internally.
-    # Pass our `min_conf` so we can surface weaker-but-real ingredients (e.g., rice).
     try:
-        try:
-            results = ingredient_yolo_model.predict(img_bgr, verbose=False, conf=float(min_conf), iou=0.5)[0]
-        except Exception:
-            results = ingredient_yolo_model(img_bgr, verbose=False, conf=float(min_conf), iou=0.5)[0]
+        results = ingredient_yolo_model(img_bgr, verbose=False)[0]
     except Exception:
-        try:
-            results = ingredient_yolo_model(img_bgr, verbose=False)[0]
-        except Exception:
-            return []
+        return []
 
     if results.masks is None or len(results.masks) == 0:
         return []
@@ -1121,14 +1049,6 @@ def _detect_ingredient_components(pil_img: Image.Image,
             continue
 
         name = ingredient_yolo_model.names.get(c, str(c))
-        name = str(name).strip()
-
-        # Many YOLO datasets are trained with numeric names ("0", "1", ...).
-        # If we have a mapping file, use it to show real ingredient names.
-        if (not name) or name.isdigit() or name.lower() == str(c):
-            if INGREDIENT_LABELS and c in INGREDIENT_LABELS:
-                name = str(INGREDIENT_LABELS[c]).strip()
-
         name = name.replace('_', ' ').replace('-', ' ').strip().title()
         if not name:
             name = str(c)
@@ -1200,14 +1120,19 @@ val_transform = T.Compose([
 
 def predict(image: Image.Image):
     if image is None:
-        return 'Please upload an image.', None, [], '', _gpu_stats_md()
+        return 'Please upload an image.', None, '<div style="color:var(--muted); padding:20px;">No image uploaded.</div>', '', _gpu_stats_md()
 
     if pipeline_mode is None:
         return ('No model checkpoint found. Download best_mlp.pt + mlp_feat_stats.npz '
-                'from Kaggle output and place them in models/.'), None, [], '', _gpu_stats_md()
+                'from Kaggle output and place them in models/.'), None, '<div style="color:var(--danger); padding:20px;">Error: No model loaded.</div>', '', _gpu_stats_md()
 
     _timing = {}  # type: dict
     _t0 = time.perf_counter()
+
+    # Safely initialize variables so Phase 3 baseline fallback won't crash the HTML cards
+    detected_food = None
+    food_conf = None
+    mode_note = ''
 
     if pipeline_mode in ('full', 'phase6', 'phase4'):
         # ── Step 1 (Phase 4/6 shared): YOLO mask + MiDaS depth → 9 features ──────
@@ -1230,11 +1155,7 @@ def predict(image: Image.Image):
         food_type_preds = _classify_food_type(image, raw_mask, top_k=3)
         _timing['EfficientNet-B0 food classification (Phase 5)'] = (time.perf_counter() - _ts) * 1000
         detected_food   = food_type_preds[0][0] if food_type_preds else None
-        food_conf       = float(food_type_preds[0][1]) if food_type_preds else None
-
-        # If the classifier is unsure, hide the dish label rather than show a wrong one.
-        if detected_food and (food_conf is None or food_conf < DISH_LABEL_MIN_CONF):
-            detected_food = None
+        food_conf       = food_type_preds[0][1] if food_type_preds else None
 
         # Multi-item list (YOLO region proposals + Food-101 classification per region)
         _ts = time.perf_counter()
@@ -1563,10 +1484,8 @@ def predict(image: Image.Image):
         # Format weight string for the table: "250 g" or "250±66 g"
         _w_str = f'{w_mean:.0f}±{w_std_mc*2:.0f} g' if w_mean else '—'
 
-        # Prefer ingredient/component segmentation for breakdown.
-        # Only treat rows as "ingredients" when ingredient_items are present.
-        has_ingredient_seg = bool(ingredient_items)
-        items_for_breakdown = ingredient_items if has_ingredient_seg else (item_foods if item_foods else items)
+        # Prefer multi-item classification list for breakdown; fall back to YOLO-only
+        items_for_breakdown = ingredient_items if ingredient_items else (item_foods if item_foods else items)
 
         if detected_food:
             # Dish-level label (Food-101 classifier is single-label).
@@ -1574,60 +1493,53 @@ def predict(image: Image.Image):
             for alt_name, alt_conf in (food_type_preds[1:3] if food_type_preds else []):
                 ingredient_rows.append([f'  (alt) {alt_name}', '—', '—', f"{alt_conf*100:.0f}%"])
 
+            # If we have ingredient/component segmentation, compute a nutrition
+            # breakdown using USDA per-ingredient densities.
+            # To guarantee the row calories sum to the displayed total calories,
+            # we compute raw per-ingredient calories and then rescale.
             if items_for_breakdown:
                 total_area = float(sum(it.get('area', 0.0) for it in items_for_breakdown) or 1.0)
 
-                if has_ingredient_seg:
-                    # Ingredient/component segmentation → USDA per-ingredient densities.
-                    # To guarantee the row calories sum to the displayed total calories,
-                    # we compute raw per-ingredient calories and then rescale.
-                    raw_rows = []
-                    raw_sum = 0.0
-                    for it in sorted(items_for_breakdown, key=lambda x: x.get('area', 0.0), reverse=True):
-                        name = str(it.get('name', 'Item')).strip()
-                        if name.strip().lower() == detected_food.strip().lower():
-                            continue
-                        frac = float(it.get('area', 0.0)) / total_area
-                        conf_str = f"{it.get('conf', 0.0)*100:.0f}%"
+                # Compute raw per-ingredient calories
+                raw_rows = []
+                raw_sum = 0.0
+                for it in sorted(items_for_breakdown, key=lambda x: x.get('area', 0.0), reverse=True):
+                    name = str(it.get('name', 'Item')).strip()
+                    if name.strip().lower() == detected_food.strip().lower():
+                        continue
+                    frac = float(it.get('area', 0.0)) / total_area
+                    conf_str = f"{it.get('conf', 0.0)*100:.0f}%"
 
-                        grams = float(w_mean * frac) if w_mean else None
-                        kcal_per_g = None
-                        if name:
-                            _entry = _lookup_usda(_food_name_to_key(name))
-                            if _entry is not None:
-                                kcal_per_g = float(_entry[0])
+                    # Allocate grams by area if weight is available.
+                    grams = float(w_mean * frac) if w_mean else None
 
-                        if grams is not None and kcal_per_g is not None:
-                            cal_raw = float(grams * kcal_per_g)
-                        else:
-                            cal_raw = float(total_cal * frac)
+                    kcal_per_g = None
+                    if name:
+                        _entry = _lookup_usda(_food_name_to_key(name))
+                        if _entry is not None:
+                            kcal_per_g = float(_entry[0])
 
-                        raw_rows.append((name, grams, conf_str, cal_raw))
-                        raw_sum += float(cal_raw)
+                    if grams is not None and kcal_per_g is not None:
+                        cal_raw = float(grams * kcal_per_g)
+                    else:
+                        # No weight or no USDA density — fall back to area-only split
+                        # so we can still provide a consistent breakdown.
+                        cal_raw = float(total_cal * frac)
 
-                    scale = float(total_cal / raw_sum) if raw_sum > 1e-6 else 1.0
-                    for (name, grams, conf_str, cal_raw) in raw_rows:
-                        item_w_str = f"{grams:.0f} g" if grams is not None else '—'
-                        ingredient_rows.append([
-                            f"• {name}",
-                            item_w_str,
-                            f"{(cal_raw * scale):.0f}",
-                            conf_str,
-                        ])
-                else:
-                    # No ingredient model loaded: visual breakdown only.
-                    for it in sorted(items_for_breakdown, key=lambda x: x.get('area', 0.0), reverse=True):
-                        if str(it.get('name', '')).strip().lower() == detected_food.strip().lower():
-                            continue
-                        frac = float(it.get('area', 0.0)) / total_area
-                        conf_str = f"{it.get('conf', 0.0)*100:.0f}%"
-                        item_w_str = f"{(w_mean * frac):.0f} g" if w_mean else '—'
-                        ingredient_rows.append([
-                            f"• {it.get('name', 'Item')}",
-                            item_w_str,
-                            f"{total_cal * frac:.0f}",
-                            conf_str,
-                        ])
+                    raw_rows.append((name, grams, conf_str, cal_raw))
+                    raw_sum += float(cal_raw)
+
+                # Rescale so sum(rows) == total_cal
+                scale = float(total_cal / raw_sum) if raw_sum > 1e-6 else 1.0
+
+                for (name, grams, conf_str, cal_raw) in raw_rows:
+                    item_w_str = f"{grams:.0f} g" if grams is not None else '—'
+                    ingredient_rows.append([
+                        f"• {name}",
+                        item_w_str,
+                        f"{(cal_raw * scale):.0f}",
+                        conf_str,
+                    ])
 
         elif items_for_breakdown:
             # No dish classification — show each YOLO food item.
@@ -1643,13 +1555,11 @@ def predict(image: Image.Image):
             ingredient_rows = [['Unknown dish', _w_str, f"{total_cal:.0f}", '—']]
 
         result_json = {col: f'{mu:.1f} ± {sig*2:.1f}' for col, mu, sig in zip(target_cols, mean_pred, std_pred)}
-        clf_note  = f'🍽 Detected food: **{detected_food}** ({food_conf*100:.0f}% confidence)\n\n' if detected_food else ''
-        mode_note = (f'{clf_note}'
-                     f'_Pipeline: Phase 6 — YOLOv8-seg + MiDaS → WeightMLP · '
+        mode_note = (f'_Pipeline: Phase 6 — YOLOv8-seg + MiDaS → WeightMLP · '
                      f'Phase 4 — YOLO+MiDaS → MLP · Phase 5 — EfficientNet-B0_'
                      f'{ensemble_note}{p3_note}')
 
-    else:  # phase3 only
+    else:  # phase3 only fallback
         _ts = time.perf_counter()
         img_t = val_transform(image.convert('RGB')).unsqueeze(0).to(device)
         with torch.no_grad():
@@ -1663,72 +1573,533 @@ def predict(image: Image.Image):
     _timing['Total inference (wall-clock)'] = (time.perf_counter() - _t0) * 1000
     gpu_md = _gpu_stats_md(_timing)
 
-    label_txt = '\n'.join([f'{col}: {result_json[col]}' for col in target_cols])
-    label_txt += f'\n\n{mode_note}\n> Units: kcal for calories, grams for macros'
-    return label_txt, result_json, ingredient_rows, _weight_breakdown_md, gpu_md
+    # --- NEW UI LOGIC: HTML Cards & Table ---
+    # 1. Build sleek macro cards for a dashboard look
+    cards_html = '<div style="display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap;">'
+    for col in target_cols:
+        val = result_json[col]
+        cards_html += f'''
+        <div style="background: var(--surface2); padding: 16px; border-radius: var(--radius); border: 1px solid var(--border); flex: 1; min-width: 100px; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.02);">
+            <div style="font-family: 'Outfit', sans-serif; font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; margin-bottom: 4px;">{col}</div>
+            <div style="font-family: 'Outfit', sans-serif; font-size: 1.25rem; color: var(--purple-dark); font-weight: 800;">{val}</div>
+        </div>
+        '''
+    cards_html += '</div>'
+
+    # 2. Clean up Markdown artifacts and format the faint text
+    clean_mode = mode_note.replace('_', '')
+    if detected_food:
+        clean_clf = f'<div style="font-size: 1rem; margin-bottom: 16px; color: var(--text);">🍽 Detected food: <strong>{detected_food}</strong> ({food_conf*100:.0f}% confidence)</div>'
+    else:
+        clean_clf = ''
+
+    # 3. Combine into final HTML output
+    label_txt = f"""
+    {clean_clf}
+    {cards_html}
+    <div style="background: var(--purple-dim); border-radius: var(--radius); padding: 12px 16px; font-size: 0.8rem; color: var(--text); line-height: 1.5; margin-bottom: 12px; border: 1px solid rgba(123,110,246,0.15);">
+        <strong style="color: var(--purple-dark);">⚙️ Pipeline Details:</strong><br> {clean_mode}
+    </div>
+    <div style="font-size: 0.8rem; color: var(--muted); border-left: 3px solid var(--purple); padding-left: 10px;">
+        Units: kcal for calories, grams for macros
+    </div>
+    """
+
+    # 4. Build Custom HTML Table
+    table_html = '''
+    <div style="background: var(--surface); border: 1px solid var(--border); border-top: none; border-radius: 0 0 var(--radius) var(--radius); overflow: hidden; box-shadow: var(--shadow);">
+        <table class="n5k-html-table" style="width: 100%; border-collapse: collapse; text-align: left; background: var(--surface);">
+            <thead>
+                <tr style="background: var(--surface2); border-bottom: 1px solid var(--border);">
+                    <th style="padding: 14px 20px; font-family: 'Outfit', sans-serif; font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700;">Detected Dish</th>
+                    <th style="padding: 14px 20px; font-family: 'Outfit', sans-serif; font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700;">Predicted Weight</th>
+                    <th style="padding: 14px 20px; font-family: 'Outfit', sans-serif; font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700;">Est. Calories (kcal)</th>
+                    <th style="padding: 14px 20px; font-family: 'Outfit', sans-serif; font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700;">Confidence</th>
+                </tr>
+            </thead>
+            <tbody>
+    '''
+    
+    for row in ingredient_rows:
+        dish, weight, cals, conf = row
+        # Add visual hierarchy for alternate predictions or sub-ingredients
+        is_alt = "(alt)" in dish or "•" in dish
+        pad_left = "36px" if is_alt else "20px"
+        text_color = "var(--muted)" if is_alt else "var(--text)"
+        font_w = "500" if is_alt else "700"
+        
+        table_html += f'''
+                <tr class="n5k-row">
+                    <td style="padding: 14px 20px; padding-left: {pad_left}; font-size: 0.9rem; font-weight: {font_w}; color: {text_color};">{dish}</td>
+                    <td style="padding: 14px 20px; font-size: 0.9rem; color: var(--text);">{weight}</td>
+                    <td style="padding: 14px 20px; font-size: 0.95rem; color: var(--purple-dark); font-weight: 800;">{cals}</td>
+                    <td style="padding: 14px 20px; font-size: 0.85rem; color: var(--muted); font-weight: 500;">{conf}</td>
+                </tr>
+        '''
+    table_html += '</tbody></table></div>'
+
+    return label_txt, result_json, table_html, _weight_breakdown_md, gpu_md
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Gradio UI
+# Gradio UI  —  Premium Dark Food-Tech Redesign
 # ─────────────────────────────────────────────────────────────────────────────
-
+ 
 mode_label = {
-    'full':   '🚀 Full Pipeline — Phase 3+4+5+6 all active (ensemble Phase4+6, food type from Phase5, ResNet3 baseline)',
-    'phase6': '🎯 Phase 6 — Weight-First: YOLO + MiDaS → WeightMLP → × dataset constants (professor spec)',
-    'phase4': '🔬 Phase 4+5 — YOLO + EfficientNet food type + Depth + MLP direct regression',
+    'full':   '🚀 Full Pipeline — Phase 3+4+5+6 all active',
+    'phase6': '🎯 Phase 6 — Weight-First: YOLO + MiDaS → WeightMLP',
+    'phase4': '🔬 Phase 4+5 — YOLO + EfficientNet + Depth + MLP',
     'phase3': '📊 Phase 3 — ResNet-50 baseline',
     None:     '⚠ No model loaded',
 }
+ 
+clf_label = ('Phase 5 food classifier active'
+             if food_clf is not None
+             else 'No food classifier — run 05_food_classifier.ipynb')
+ 
+# ── Custom CSS ────────────────────────────────────────────────────────────────
+CUSTOM_CSS = """
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Manrope:wght@400;500;600;700;800&display=swap');
+ 
+/* ── Root palette (mirrors dashboard) ── */
+:root {
+    --bg:           #eceffe;
+    --surface:      #ffffff;
+    --surface2:     #f4f5fd;
+    --border:       rgba(160,170,220,0.2);
+    --purple:       #7b6ef6;
+    --purple-light: #a89cf7;
+    --purple-dark:  #5a4de6;
+    --purple-dim:   rgba(123,110,246,0.08);
+    --purple-glow:  rgba(123,110,246,0.28);
+    --green:        #b5f03c;
+    --text:         #1a1d2e;
+    --muted:        #8b90b0;
+    --danger:       #f06292;
+    --success:      #22c4a0;
+    --radius:       16px;
+    --radius-lg:    24px;
+    --shadow:       0 6px 28px rgba(120,130,200,0.13);
+    --shadow-hover: 0 12px 44px rgba(120,130,200,0.22);
+}
+ 
+/* ── Global resets ── */
+body, .gradio-container {
+    background: var(--bg) !important;
+    font-family: 'Manrope', sans-serif !important;
+    color: var(--text) !important;
+}
+footer { display: none !important; }
+.gradio-container { max-width: 1280px !important; margin: 0 auto !important; padding: 28px 32px !important; }
+ 
+/* ── Hero banner ── */
+.n5k-hero {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 32px 40px 28px;
+    margin-bottom: 28px;
+    box-shadow: var(--shadow);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    position: relative;
+    overflow: hidden;
+}
+.n5k-hero::before {
+    content: '';
+    position: absolute;
+    top: -80px; right: -80px;
+    width: 280px; height: 280px;
+    background: radial-gradient(circle, var(--purple-glow) 0%, transparent 65%);
+    pointer-events: none;
+}
+.n5k-hero::after {
+    content: '';
+    position: absolute;
+    bottom: -60px; left: 120px;
+    width: 200px; height: 200px;
+    background: radial-gradient(circle, rgba(181,240,60,0.1) 0%, transparent 65%);
+    pointer-events: none;
+}
+ 
+.n5k-hero-left h1 {
+    font-family: 'Outfit', sans-serif !important;
+    font-size: 2rem !important;
+    font-weight: 800 !important;
+    letter-spacing: -0.03em !important;
+    color: var(--text) !important;
+    margin: 0 0 6px !important;
+    line-height: 1.15 !important;
+}
+.n5k-hero-left h1 span { color: var(--purple); }
+.n5k-hero-left p {
+    font-size: 0.88rem !important;
+    color: var(--muted) !important;
+    margin: 0 0 18px !important;
+    font-weight: 400 !important;
+}
+ 
+.n5k-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--purple-dim);
+    border: 1px solid rgba(123,110,246,0.2);
+    border-radius: 100px;
+    padding: 5px 14px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--purple);
+    margin-right: 6px;
+    margin-top: 4px;
+}
+.n5k-pill.warn {
+    background: rgba(240,98,146,0.08);
+    border-color: rgba(240,98,146,0.25);
+    color: var(--danger);
+}
+.n5k-pill.ok {
+    background: rgba(34,196,160,0.08);
+    border-color: rgba(34,196,160,0.25);
+    color: var(--success);
+}
+ 
+/* Stats strip on the right of hero */
+.n5k-hero-stats {
+    display: flex;
+    gap: 16px;
+    flex-shrink: 0;
+}
+.n5k-stat-chip {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 20px;
+    text-align: center;
+    min-width: 90px;
+}
+.n5k-stat-chip .val {
+    font-family: 'Outfit', sans-serif;
+    font-size: 1.4rem;
+    font-weight: 800;
+    color: var(--text);
+    letter-spacing: -0.04em;
+    line-height: 1;
+}
+.n5k-stat-chip .lbl {
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    margin-top: 5px;
+}
+ 
+/* ── Section labels ── */
+.n5k-section-label {
+    font-family: 'Outfit', sans-serif !important;
+    font-size: 0.7rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.1em !important;
+    text-transform: uppercase !important;
+    color: var(--muted) !important;
+    margin: 0 0 10px !important;
+}
+ 
+/* ── Image upload zone ── */
+#img_upload {
+    border-radius: var(--radius-lg) !important;
+    overflow: hidden !important;
+    border: 2px dashed rgba(123,110,246,0.25) !important;
+    background: var(--surface) !important;
+    min-height: 320px !important;
+    box-shadow: var(--shadow) !important;
+    transition: border-color 0.2s, box-shadow 0.2s !important;
+}
+#img_upload:hover {
+    border-color: rgba(123,110,246,0.55) !important;
+    box-shadow: var(--shadow-hover) !important;
+}
+#img_upload .icon-wrap svg { color: var(--purple) !important; }
+#img_upload label span { color: var(--muted) !important; font-family: 'Manrope', sans-serif !important; }
+ 
+/* ── Predict button ── */
+#predict_btn {
+    background: linear-gradient(135deg, var(--purple-dark), var(--purple-light)) !important;
+    color: #ffffff !important;
+    border: none !important;
+    border-radius: var(--radius) !important;
+    font-family: 'Outfit', sans-serif !important;
+    font-size: 1rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.01em !important;
+    padding: 16px 0 !important;
+    width: 100% !important;
+    cursor: pointer !important;
+    box-shadow: 0 6px 24px var(--purple-glow) !important;
+    transition: box-shadow 0.25s, transform 0.15s, filter 0.2s !important;
+}
+#predict_btn:hover {
+    filter: brightness(1.08) !important;
+    box-shadow: 0 10px 36px var(--purple-glow) !important;
+    transform: translateY(-2px) !important;
+}
+#predict_btn:active { transform: translateY(0) !important; }
+ 
+/* ── Text output (Markdown) ── */
+#text_out {
+    background: var(--surface) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius) !important;
+    padding: 20px 22px !important;
+    font-size: 0.9rem !important;
+    line-height: 1.75 !important;
+    min-height: 110px !important;
+    color: var(--text) !important;
+    box-shadow: var(--shadow) !important;
+}
+#text_out p, #text_out strong { font-family: 'Manrope', sans-serif !important; color: var(--text) !important; }
+#text_out strong { color: var(--purple) !important; }
+ 
+/* ── JSON output ── */
+#json_out {
+    background: var(--surface2) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius) !important;
+    font-size: 0.8rem !important;
+    color: var(--purple-dark) !important;
+    box-shadow: inset 0 2px 8px rgba(120,130,200,0.07) !important;
+}
+#json_out .json-holder { background: transparent !important; }
+ 
+/* ── Custom HTML Ingredient Table ── */
+.n5k-html-table th { border: none !important; }
+.n5k-html-table td { 
+    border: none !important; 
+    border-bottom: 1px solid var(--border) !important; 
+}
+.n5k-html-table tr:last-child td { border-bottom: none !important; }
+.n5k-row { transition: background 0.15s !important; }
+.n5k-row:hover { background: var(--purple-dim) !important; }
 
-clf_label = '🍕 Phase 5 food classifier active' if food_clf is not None else '⚠ No food classifier (run 05_food_classifier.ipynb to enable food-type detection)'
-
-with gr.Blocks(title='Nutrition5K Estimator') as demo:
-    p6_note = ('> **Phase 6 active**: Dish weight is predicted first, then converted to calories/macros '
-               'using calorie-density constants derived from Nutrition5K. '
-               '(Professor spec §4.3)\n\n') if pipeline_mode == 'phase6' else ''
-    gr.Markdown(
-        f'# 🥗 Nutrition5K — Dish Nutrition Estimator\n'
-        f'Upload **any real-world food photo** to get calories, fat, protein, and carbs.\n\n'
-        f'{p6_note}'
-        f'**Active pipeline**: {mode_label.get(pipeline_mode, "unknown")}  \n'
-        f'**Food recognition**: {clf_label}  \n'
-        f'**Ingredient segmentation**: {ING_SEG_LABEL}'
+/* ── Accordions ── */
+.n5k-accordion > .label-wrap {
+    background: var(--surface) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius) !important;
+    padding: 14px 18px !important;
+    font-family: 'Outfit', sans-serif !important;
+    font-size: 0.85rem !important;
+    font-weight: 700 !important;
+    color: var(--text) !important;
+    cursor: pointer !important;
+    box-shadow: var(--shadow) !important;
+    transition: background 0.15s, box-shadow 0.15s !important;
+}
+.n5k-accordion > .label-wrap:hover {
+    background: var(--purple-dim) !important;
+    box-shadow: var(--shadow-hover) !important;
+}
+.n5k-accordion > .label-wrap svg { color: var(--purple) !important; }
+.n5k-accordion .inner {
+    background: var(--surface2) !important;
+    border: 1px solid var(--border) !important;
+    border-top: none !important;
+    border-radius: 0 0 var(--radius) var(--radius) !important;
+    padding: 18px !important;
+}
+.n5k-accordion .inner p,
+.n5k-accordion .inner li,
+.n5k-accordion .inner td { color: var(--text) !important; font-family: 'Manrope', sans-serif !important; font-size: 0.86rem !important; }
+.n5k-accordion .inner th { color: var(--muted) !important; font-family: 'Outfit', sans-serif !important; font-size: 0.7rem !important; }
+ 
+/* ── Tip box ── */
+.n5k-tips {
+    background: var(--surface) !important;
+    border: 1px solid var(--border) !important;
+    border-left: 3px solid var(--purple) !important;
+    border-radius: var(--radius) !important;
+    padding: 16px 22px !important;
+    font-size: 0.83rem !important;
+    color: var(--muted) !important;
+    line-height: 1.75 !important;
+    box-shadow: var(--shadow) !important;
+}
+.n5k-tips p { color: var(--muted) !important; margin: 0 !important; }
+.n5k-tips strong { color: var(--purple) !important; }
+.n5k-tips code {
+    background: var(--purple-dim);
+    color: var(--purple-dark);
+    border-radius: 5px;
+    padding: 1px 6px;
+    font-size: 0.8rem;
+}
+ 
+/* ── Table card header ── */
+.n5k-table-header {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-bottom: none;
+    border-radius: var(--radius) var(--radius) 0 0;
+    padding: 14px 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.n5k-table-header .t-icon {
+    width: 34px; height: 34px;
+    background: var(--purple-dim);
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1rem;
+    flex-shrink: 0;
+}
+.n5k-table-header .t-title {
+    font-family: 'Outfit', sans-serif;
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--text);
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+}
+.n5k-table-header .t-sub {
+    font-size: 0.7rem;
+    color: var(--muted);
+    margin-top: 2px;
+}
+ 
+/* ── Misc gradio overrides ── */
+.gradio-container .prose { color: var(--text) !important; }
+.gradio-container label > span {
+    color: var(--muted) !important;
+    font-family: 'Manrope', sans-serif !important;
+    font-size: 0.75rem !important;
+    font-weight: 600 !important;
+}
+/* Row & column gaps */
+.gradio-container .gap { gap: 20px !important; }
+"""
+ 
+# ── Build HERO HTML ───────────────────────────────────────────────────────────
+_active_mode = mode_label.get(pipeline_mode, '⚠ No model loaded')
+_clf_ok      = food_clf is not None
+_p6_banner   = ''
+if pipeline_mode == 'phase6':
+    _p6_banner = (
+        '<div style="margin-top:14px;padding:10px 16px;background:rgba(123,110,246,0.07);'
+        'border:1px solid rgba(123,110,246,0.18);border-radius:10px;font-size:0.78rem;color:var(--purple);">'
+        '⚡ <strong>Phase 6 active</strong>: Dish weight predicted first → converted to calories/macros '
+        'via calorie-density constants derived from Nutrition5K (Professor spec §4.3).</div>'
     )
+ 
+HERO_HTML = f"""
+<div class="n5k-hero">
+  <div class="n5k-hero-left">
+    <h1>🥗 <span>Nutrition</span>5K</h1>
+    <p>Upload any real-world food photo — get calories, macros &amp; ingredient breakdown instantly.</p>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
+      <span class="n5k-pill">🚀 {pipeline_mode or 'no model'}</span>
+      <span class="n5k-pill {'ok' if _clf_ok else 'warn'}">
+        {'🍕 Classifier active' if _clf_ok else '⚠ No classifier'}
+      </span>
+      <span class="n5k-pill" style="font-size:0.7rem;opacity:0.75;max-width:380px;
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+        {_active_mode}
+      </span>
+    </div>
+    {_p6_banner}
+  </div>
+  <div class="n5k-hero-stats">
+    <div class="n5k-stat-chip">
+      <div class="val">101</div>
+      <div class="lbl">Food Classes</div>
+    </div>
+    <div class="n5k-stat-chip">
+      <div class="val">6</div>
+      <div class="lbl">Phases</div>
+    </div>
+    <div class="n5k-stat-chip">
+      <div class="val" style="color:var(--purple);">{'✓' if _clf_ok else '✗'}</div>
+      <div class="lbl">Classifier</div>
+    </div>
+  </div>
+</div>
+"""
+ 
+# ── UI ────────────────────────────────────────────────────────────────────────
+with gr.Blocks(title='Nutrition5K Estimator', css=CUSTOM_CSS) as demo:
+ 
+    gr.HTML(HERO_HTML)
+ 
+    with gr.Row(equal_height=False):
+ 
+        # ── Left: image upload + button ──────────────────────────────────────
+        with gr.Column(scale=5):
+            gr.HTML('<p class="n5k-section-label">📸 Food Image</p>')
+            img_input = gr.Image(type='pil', label='', elem_id='img_upload')
+            predict_btn = gr.Button('⚡  Analyse Dish', variant='primary', elem_id='predict_btn')
+ 
+        # ── Right: results ────────────────────────────────────────────────────
+        with gr.Column(scale=7):
+            gr.HTML('<p class="n5k-section-label">🧪 Nutrition Prediction</p>')
+            
+            # Changed from gr.Markdown to gr.HTML to render our new cards
+            text_out = gr.HTML(
+                value='<div style="color: var(--muted); padding: 20px;"><em>Upload a dish photo and press <strong>Analyse Dish</strong> to see results.</em></div>',
+                elem_id='text_out',
+            )
+            
+            # Tucked the raw JSON inside an accordion to save space
+            with gr.Accordion('📦 Raw JSON Values', open=False, elem_classes='n5k-accordion'):
+                json_out = gr.JSON(label='', elem_id='json_out')
+ 
+    # ── Ingredient / breakdown table ─────────────────────────────────────────
+    gr.HTML("""
+    <div style="margin-top:20px;">
+      <div class="n5k-table-header">
+        <div class="t-icon">🍽</div>
+        <div>
+          <div class="t-title">Detected Dish &amp; Calorie Breakdown</div>
+          <div class="t-sub">Phase 5 dish classifier (Food-101) + YOLO segmentation</div>
+        </div>
+      </div>
+    </div>
+    """)
+    ingredient_table = gr.HTML()
+ 
+    # ── Accordions ───────────────────────────────────────────────────────────
     with gr.Row():
-        img_input = gr.Image(type='pil', label='Upload Dish Image')
-        with gr.Column():
-            text_out = gr.Markdown(label='Nutrition Prediction')
-            json_out = gr.JSON(label='Raw values')
-
-    gr.Markdown('### 🍽 Dish & Ingredient Breakdown')
-    ingredient_table = gr.Dataframe(
-        headers=['Item', 'Predicted Weight', 'Est. Calories (kcal)', 'Confidence'],
-        datatype=['str', 'str', 'str', 'str'],
-        label='Dish label (Food-101) + ingredient/component rows (ingredient YOLOv8-seg, if loaded)',
-        interactive=False,
-    )
-
-    with gr.Accordion('⚖ Weight Prediction Details', open=False):
-        weight_detail_out = gr.Markdown(
-            value='_Run a prediction to see the weight breakdown._'
-        )
-
-    with gr.Accordion('⚡ GPU / Compute Stats', open=False):
-        gpu_stats_out = gr.Markdown(value=_gpu_stats_md())
-
-    predict_btn = gr.Button('Predict 🔍', variant='primary')
+        with gr.Column(scale=1):
+            with gr.Accordion('⚖  Weight Prediction Details', open=False, elem_classes='n5k-accordion'):
+                weight_detail_out = gr.Markdown(
+                    value='_Run a prediction to see the weight breakdown._',
+                )
+        with gr.Column(scale=1):
+            with gr.Accordion('⚡  GPU / Compute Stats', open=False, elem_classes='n5k-accordion'):
+                gpu_stats_out = gr.Markdown(value=_gpu_stats_md())
+ 
+    # ── Tips footer ──────────────────────────────────────────────────────────
+    gr.HTML("""
+    <div class="n5k-tips" style="margin-top:16px;">
+      <p>
+        <strong>Tips</strong> — Works best with a single dish centred in frame.
+        Food-101 covers pizza, sushi, ramen, burgers, salads, pasta, tacos, and 94 more categories.
+        For Asian &amp; regional foods, train on UECFOOD-256 or iFood-2019 (see notebook 05).
+        <br><br>
+        <strong>Phase 6 setup</strong> — Train <code>06_weight_prediction.ipynb</code> on Kaggle,
+        then download <code>best_weight_mlp.pt</code>, <code>nutrition_constants.json</code>,
+        and <code>weight_feat_stats.npz</code> into <code>models/</code>.
+      </p>
+    </div>
+    """)
+ 
+    # ── Event wiring (unchanged) ─────────────────────────────────────────────
     predict_btn.click(
         fn=predict, inputs=img_input,
         outputs=[text_out, json_out, ingredient_table, weight_detail_out, gpu_stats_out]
     )
-
-    gr.Markdown(
-        '> **Tips**: Works best with a single dish centred in frame.  \n'
-        '> Food-101 covers pizza, sushi, ramen, burgers, salads, pasta, tacos, and 94 more categories.  \n'
-        '> For Asian & regional foods train on UECFOOD-256 or iFood-2019 (see notebook 05).  \n'
-        '> **Phase 6**: Train `06_weight_prediction.ipynb` on Kaggle, download '
-        '`best_weight_mlp.pt + nutrition_constants.json + weight_feat_stats.npz`, place in `models/`.'
-    )
-
+ 
 if __name__ == '__main__':
     demo.launch(share=True)
