@@ -15,6 +15,14 @@ venv/
 *.h5
 *.ckpt
 
+# Allow model artifacts inside models/ (so friends can run the app)
+!models/*.pt
+!models/*.npz
+!models/*.json
+
+# Too large for normal GitHub pushes (use Git LFS if you really want it)
+models/best_model.pt
+
 # Ignore OS files
 .DS_Store
 Thumbs.db
