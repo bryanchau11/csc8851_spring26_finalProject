@@ -51,12 +51,64 @@ P3_CKPT       = os.path.join(MODELS_DIR, 'best_model.pt')
 # Phase 5 — food classifier (optional, adds food-type label)
 FOOD_CLF_CKPT = os.path.join(MODELS_DIR, 'best_food_classifier.pt')
 FOOD_CLF_LBLS = os.path.join(MODELS_DIR, 'food101_labels.json')
+ING_LBLS_JSON = os.path.join(MODELS_DIR, 'ingredient_labels.json')
 IMG_SIZE      = 224
 MC_SAMPLES    = 30
+
+# If the dish classifier is unsure, don’t present a confidently-wrong label.
+DISH_LABEL_MIN_CONF = 0.35
 
 device = torch.device('cuda' if torch.cuda.is_available() else
                       'mps'  if torch.backends.mps.is_available() else
                       'cpu')
+
+
+def _load_ingredient_labels():
+    """Load optional ingredient/component label mapping.
+
+    Expected format in models/ingredient_labels.json:
+      {"0": "rice", "1": "egg", ...}
+    or
+      ["rice", "egg", ...]  (index = class id)
+    """
+    if not os.path.isfile(ING_LBLS_JSON):
+        return None
+    try:
+        with open(ING_LBLS_JSON) as f:
+            obj = json.load(f)
+
+        if isinstance(obj, list):
+            return {int(i): str(v) for i, v in enumerate(obj)}
+        if isinstance(obj, dict):
+            out = {}
+            for k, v in obj.items():
+                try:
+                    out[int(k)] = str(v)
+                except Exception:
+                    continue
+            return out or None
+        return None
+    except Exception:
+        return None
+
+
+INGREDIENT_LABELS = _load_ingredient_labels()
+
+
+def _ingredient_labels_are_numeric(labels) -> bool:
+    if not labels:
+        return True
+    try:
+        # Sample a few values; if they're all just digits, mapping is a no-op.
+        vals = list(labels.values())
+        if not vals:
+            return True
+        for v in vals[: min(25, len(vals))]:
+            if not str(v).strip().isdigit():
+                return False
+        return True
+    except Exception:
+        return True
 
 
 def _gpu_stats_md(timing=None) -> str:
@@ -587,6 +639,18 @@ except Exception as _e:
     ingredient_yolo_model = None
     print(f'ℹ Ingredient seg model not available ({_e})')
 
+ING_SEG_LABEL = (
+    f'✅ {os.path.basename(_ingredient_ckpt)}'
+    if ingredient_yolo_model is not None and _ingredient_ckpt
+    else '⚠ Not loaded (add models/best_ingredient_yolov8_seg.pt)'
+)
+
+if ingredient_yolo_model is not None and ingredient_yolo_model.names:
+    _some_name = str(next(iter(ingredient_yolo_model.names.values()))).strip()
+    _labels_missing_or_bad = (not INGREDIENT_LABELS) or _ingredient_labels_are_numeric(INGREDIENT_LABELS)
+    if (_some_name.isdigit() or _some_name in {'0', '1'}) and _labels_missing_or_bad:
+        ING_SEG_LABEL = f'⚠ Loaded, but labels are numeric (add models/ingredient_labels.json)'
+
 # ── Load Phase 6 (weight-first) ───────────────────────────────────────────────
 _p6_loaded = False
 if _geo_models_loaded and os.path.isfile(P6_CKPT) and os.path.isfile(P6_CONST) and os.path.isfile(P6_STATS):
@@ -1008,9 +1072,9 @@ def _detect_and_classify_items(pil_img: Image.Image,
 
 
 def _detect_ingredient_components(pil_img: Image.Image,
-                                 max_items: int = 12,
-                                 min_conf: float = 0.25,
-                                 min_area: float = 0.003):
+                                 max_items: int = 18,
+                                 min_conf: float = 0.15,
+                                 min_area: float = 0.001):
     """Detect ingredient/component instances using a fine-tuned YOLOv8-seg model.
 
     Returns list[dict{name, conf, area}] sorted by area desc.
@@ -1023,10 +1087,18 @@ def _detect_ingredient_components(pil_img: Image.Image,
     img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
     H, W = img_bgr.shape[:2]
 
+    # Important: Ultralytics applies a confidence filter internally.
+    # Pass our `min_conf` so we can surface weaker-but-real ingredients (e.g., rice).
     try:
-        results = ingredient_yolo_model(img_bgr, verbose=False)[0]
+        try:
+            results = ingredient_yolo_model.predict(img_bgr, verbose=False, conf=float(min_conf), iou=0.5)[0]
+        except Exception:
+            results = ingredient_yolo_model(img_bgr, verbose=False, conf=float(min_conf), iou=0.5)[0]
     except Exception:
-        return []
+        try:
+            results = ingredient_yolo_model(img_bgr, verbose=False)[0]
+        except Exception:
+            return []
 
     if results.masks is None or len(results.masks) == 0:
         return []
@@ -1049,6 +1121,14 @@ def _detect_ingredient_components(pil_img: Image.Image,
             continue
 
         name = ingredient_yolo_model.names.get(c, str(c))
+        name = str(name).strip()
+
+        # Many YOLO datasets are trained with numeric names ("0", "1", ...).
+        # If we have a mapping file, use it to show real ingredient names.
+        if (not name) or name.isdigit() or name.lower() == str(c):
+            if INGREDIENT_LABELS and c in INGREDIENT_LABELS:
+                name = str(INGREDIENT_LABELS[c]).strip()
+
         name = name.replace('_', ' ').replace('-', ' ').strip().title()
         if not name:
             name = str(c)
@@ -1150,7 +1230,11 @@ def predict(image: Image.Image):
         food_type_preds = _classify_food_type(image, raw_mask, top_k=3)
         _timing['EfficientNet-B0 food classification (Phase 5)'] = (time.perf_counter() - _ts) * 1000
         detected_food   = food_type_preds[0][0] if food_type_preds else None
-        food_conf       = food_type_preds[0][1] if food_type_preds else None
+        food_conf       = float(food_type_preds[0][1]) if food_type_preds else None
+
+        # If the classifier is unsure, hide the dish label rather than show a wrong one.
+        if detected_food and (food_conf is None or food_conf < DISH_LABEL_MIN_CONF):
+            detected_food = None
 
         # Multi-item list (YOLO region proposals + Food-101 classification per region)
         _ts = time.perf_counter()
@@ -1479,8 +1563,10 @@ def predict(image: Image.Image):
         # Format weight string for the table: "250 g" or "250±66 g"
         _w_str = f'{w_mean:.0f}±{w_std_mc*2:.0f} g' if w_mean else '—'
 
-        # Prefer multi-item classification list for breakdown; fall back to YOLO-only
-        items_for_breakdown = ingredient_items if ingredient_items else (item_foods if item_foods else items)
+        # Prefer ingredient/component segmentation for breakdown.
+        # Only treat rows as "ingredients" when ingredient_items are present.
+        has_ingredient_seg = bool(ingredient_items)
+        items_for_breakdown = ingredient_items if has_ingredient_seg else (item_foods if item_foods else items)
 
         if detected_food:
             # Dish-level label (Food-101 classifier is single-label).
@@ -1488,53 +1574,60 @@ def predict(image: Image.Image):
             for alt_name, alt_conf in (food_type_preds[1:3] if food_type_preds else []):
                 ingredient_rows.append([f'  (alt) {alt_name}', '—', '—', f"{alt_conf*100:.0f}%"])
 
-            # If we have ingredient/component segmentation, compute a nutrition
-            # breakdown using USDA per-ingredient densities.
-            # To guarantee the row calories sum to the displayed total calories,
-            # we compute raw per-ingredient calories and then rescale.
             if items_for_breakdown:
                 total_area = float(sum(it.get('area', 0.0) for it in items_for_breakdown) or 1.0)
 
-                # Compute raw per-ingredient calories
-                raw_rows = []
-                raw_sum = 0.0
-                for it in sorted(items_for_breakdown, key=lambda x: x.get('area', 0.0), reverse=True):
-                    name = str(it.get('name', 'Item')).strip()
-                    if name.strip().lower() == detected_food.strip().lower():
-                        continue
-                    frac = float(it.get('area', 0.0)) / total_area
-                    conf_str = f"{it.get('conf', 0.0)*100:.0f}%"
+                if has_ingredient_seg:
+                    # Ingredient/component segmentation → USDA per-ingredient densities.
+                    # To guarantee the row calories sum to the displayed total calories,
+                    # we compute raw per-ingredient calories and then rescale.
+                    raw_rows = []
+                    raw_sum = 0.0
+                    for it in sorted(items_for_breakdown, key=lambda x: x.get('area', 0.0), reverse=True):
+                        name = str(it.get('name', 'Item')).strip()
+                        if name.strip().lower() == detected_food.strip().lower():
+                            continue
+                        frac = float(it.get('area', 0.0)) / total_area
+                        conf_str = f"{it.get('conf', 0.0)*100:.0f}%"
 
-                    # Allocate grams by area if weight is available.
-                    grams = float(w_mean * frac) if w_mean else None
+                        grams = float(w_mean * frac) if w_mean else None
+                        kcal_per_g = None
+                        if name:
+                            _entry = _lookup_usda(_food_name_to_key(name))
+                            if _entry is not None:
+                                kcal_per_g = float(_entry[0])
 
-                    kcal_per_g = None
-                    if name:
-                        _entry = _lookup_usda(_food_name_to_key(name))
-                        if _entry is not None:
-                            kcal_per_g = float(_entry[0])
+                        if grams is not None and kcal_per_g is not None:
+                            cal_raw = float(grams * kcal_per_g)
+                        else:
+                            cal_raw = float(total_cal * frac)
 
-                    if grams is not None and kcal_per_g is not None:
-                        cal_raw = float(grams * kcal_per_g)
-                    else:
-                        # No weight or no USDA density — fall back to area-only split
-                        # so we can still provide a consistent breakdown.
-                        cal_raw = float(total_cal * frac)
+                        raw_rows.append((name, grams, conf_str, cal_raw))
+                        raw_sum += float(cal_raw)
 
-                    raw_rows.append((name, grams, conf_str, cal_raw))
-                    raw_sum += float(cal_raw)
-
-                # Rescale so sum(rows) == total_cal
-                scale = float(total_cal / raw_sum) if raw_sum > 1e-6 else 1.0
-
-                for (name, grams, conf_str, cal_raw) in raw_rows:
-                    item_w_str = f"{grams:.0f} g" if grams is not None else '—'
-                    ingredient_rows.append([
-                        f"• {name}",
-                        item_w_str,
-                        f"{(cal_raw * scale):.0f}",
-                        conf_str,
-                    ])
+                    scale = float(total_cal / raw_sum) if raw_sum > 1e-6 else 1.0
+                    for (name, grams, conf_str, cal_raw) in raw_rows:
+                        item_w_str = f"{grams:.0f} g" if grams is not None else '—'
+                        ingredient_rows.append([
+                            f"• {name}",
+                            item_w_str,
+                            f"{(cal_raw * scale):.0f}",
+                            conf_str,
+                        ])
+                else:
+                    # No ingredient model loaded: visual breakdown only.
+                    for it in sorted(items_for_breakdown, key=lambda x: x.get('area', 0.0), reverse=True):
+                        if str(it.get('name', '')).strip().lower() == detected_food.strip().lower():
+                            continue
+                        frac = float(it.get('area', 0.0)) / total_area
+                        conf_str = f"{it.get('conf', 0.0)*100:.0f}%"
+                        item_w_str = f"{(w_mean * frac):.0f} g" if w_mean else '—'
+                        ingredient_rows.append([
+                            f"• {it.get('name', 'Item')}",
+                            item_w_str,
+                            f"{total_cal * frac:.0f}",
+                            conf_str,
+                        ])
 
         elif items_for_breakdown:
             # No dish classification — show each YOLO food item.
@@ -1598,7 +1691,8 @@ with gr.Blocks(title='Nutrition5K Estimator') as demo:
         f'Upload **any real-world food photo** to get calories, fat, protein, and carbs.\n\n'
         f'{p6_note}'
         f'**Active pipeline**: {mode_label.get(pipeline_mode, "unknown")}  \n'
-        f'**Food recognition**: {clf_label}'
+        f'**Food recognition**: {clf_label}  \n'
+        f'**Ingredient segmentation**: {ING_SEG_LABEL}'
     )
     with gr.Row():
         img_input = gr.Image(type='pil', label='Upload Dish Image')
@@ -1606,11 +1700,11 @@ with gr.Blocks(title='Nutrition5K Estimator') as demo:
             text_out = gr.Markdown(label='Nutrition Prediction')
             json_out = gr.JSON(label='Raw values')
 
-    gr.Markdown('### 🍽 Detected Dish Type & Calorie Breakdown')
+    gr.Markdown('### 🍽 Dish & Ingredient Breakdown')
     ingredient_table = gr.Dataframe(
-        headers=['Detected Dish', 'Predicted Weight', 'Est. Calories (kcal)', 'Confidence'],
+        headers=['Item', 'Predicted Weight', 'Est. Calories (kcal)', 'Confidence'],
         datatype=['str', 'str', 'str', 'str'],
-        label='Phase 5 dish classifier (Food-101, single-label) + YOLO segmentation',
+        label='Dish label (Food-101) + ingredient/component rows (ingredient YOLOv8-seg, if loaded)',
         interactive=False,
     )
 
