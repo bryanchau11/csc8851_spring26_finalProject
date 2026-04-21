@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Conference Poster - Food Nutrition Estimation from a Single RGB Image</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=Source+Serif+4:opsz,wght@8..60,600;8..60,700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --ink: #1d2430;
+      --muted: #4f5a69;
+      --paper: #f8f7f4;
+      --panel: #ffffff;
+      --line: #d4d7dc;
+      --accent: #0f766e;
+      --accent-soft: #d7efec;
+      --accent-2: #8a5a44;
+      --accent-2-soft: #f2e2d9;
+      --accent-3: #3f5f94;
+      --shadow: 0 12px 30px rgba(0, 0, 0, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 20% 10%, #e2ecea 0%, #e2ecea 18%, transparent 18.5%),
+        radial-gradient(circle at 85% 20%, #f1e6df 0%, #f1e6df 13%, transparent 13.5%),
+        var(--paper);
+      color: var(--ink);
+      font-family: "Manrope", "Avenir Next", "Trebuchet MS", sans-serif;
+    }
+
+    .poster {
+      width: min(96vw, 1700px);
+      margin: 1rem auto;
+      padding: 1.25rem;
+      border: 1px solid #c9d0d8;
+      background: var(--paper);
+      box-shadow: var(--shadow);
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 1rem;
+    }
+
+    .hero {
+      border: 2px solid var(--ink);
+      border-radius: 18px;
+      background: linear-gradient(120deg, #fdfcf8 0%, #f4f8fb 60%, #edf6f5 100%);
+      padding: 1rem 1.2rem;
+      display: grid;
+      gap: 0.8rem;
+    }
+
+    .hero-top {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 1rem;
+      align-items: start;
+    }
+
+    h1 {
+      margin: 0;
+      line-height: 1.05;
+      font-family: "Source Serif 4", "Palatino Linotype", serif;
+      font-size: clamp(1.65rem, 2.5vw, 2.8rem);
+      letter-spacing: 0.01em;
+    }
+
+    .subtitle {
+      margin-top: 0.45rem;
+      color: var(--muted);
+      font-size: clamp(0.95rem, 1.25vw, 1.35rem);
+    }
+
+    .authors {
+      border-left: 3px solid var(--accent);
+      padding-left: 0.8rem;
+      font-size: clamp(0.86rem, 1.02vw, 1.08rem);
+      line-height: 1.35;
+    }
+
+    .authors .team {
+      font-weight: 800;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      font-size: 0.82em;
+      margin-bottom: 0.22rem;
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+    }
+
+    .chip {
+      font-size: clamp(0.74rem, 0.92vw, 1rem);
+      border-radius: 999px;
+      padding: 0.33rem 0.7rem;
+      border: 1px solid #b7c0cb;
+      background: #ffffff;
+      font-weight: 700;
+    }
+
+    .chip.accent {
+      border-color: #79b8ae;
+      background: var(--accent-soft);
+      color: #0f4f49;
+    }
+
+    .chip.warm {
+      border-color: #d1a48d;
+      background: var(--accent-2-soft);
+      color: #6f4330;
+    }
+
+    .main-grid {
+      display: grid;
+      grid-template-columns: 1.05fr 1.35fr 1.05fr;
+      gap: 0.9rem;
+      align-items: start;
+    }
+
+    .col {
+      display: grid;
+      gap: 0.85rem;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 0.8rem;
+      box-shadow: 0 3px 8px rgba(0, 0, 0, 0.04);
+    }
+
+    .panel h2 {
+      margin: 0 0 0.5rem 0;
+      font-size: clamp(1rem, 1.2vw, 1.28rem);
+      line-height: 1.1;
+      font-family: "Source Serif 4", "Palatino Linotype", serif;
+      color: #0e2c3f;
+      border-left: 4px solid var(--accent);
+      padding-left: 0.45rem;
+    }
+
+    .panel h3 {
+      margin: 0.45rem 0 0.35rem 0;
+      font-size: clamp(0.86rem, 1vw, 1.02rem);
+      color: #213245;
+    }
+
+    p {
+      margin: 0.38rem 0;
+      color: #232d3a;
+      font-size: clamp(0.76rem, 0.95vw, 1rem);
+      line-height: 1.35;
+    }
+
+    ul {
+      margin: 0.32rem 0 0.2rem 1.1rem;
+      padding: 0;
+      display: grid;
+      gap: 0.22rem;
+    }
+
+    li {
+      font-size: clamp(0.74rem, 0.92vw, 0.98rem);
+      line-height: 1.28;
+    }
+
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.45rem;
+      margin-top: 0.35rem;
+    }
+
+    .kpi {
+      border: 1px solid #c9d4dc;
+      border-radius: 10px;
+      background: #f9fbfd;
+      padding: 0.45rem;
+    }
+
+    .kpi .name {
+      display: block;
+      color: var(--muted);
+      font-size: clamp(0.67rem, 0.82vw, 0.9rem);
+      margin-bottom: 0.12rem;
+    }
+
+    .kpi .value {
+      font-weight: 800;
+      color: #0f4f49;
+      font-size: clamp(0.82rem, 1.05vw, 1.12rem);
+    }
+
+    .kpi .unit {
+      color: #667084;
+      font-weight: 600;
+      font-size: 0.84em;
+    }
+
+    .pipeline-wrap {
+      border: 1px solid #c9d7e0;
+      border-radius: 10px;
+      background: linear-gradient(180deg, #fcfdff 0%, #f7fbff 100%);
+      padding: 0.32rem;
+      margin-bottom: 0.4rem;
+    }
+
+    svg {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    .bar-wrap {
+      margin-top: 0.4rem;
+      display: grid;
+      gap: 0.32rem;
+    }
+
+    .bar-row {
+      display: grid;
+      grid-template-columns: 4.2rem 1fr 3.5rem;
+      gap: 0.45rem;
+      align-items: center;
+      font-size: clamp(0.7rem, 0.88vw, 0.95rem);
+    }
+
+    .bar-track {
+      height: 0.95rem;
+      border-radius: 8px;
+      border: 1px solid #c8ced5;
+      background: #f3f6f8;
+      overflow: hidden;
+    }
+
+    .bar {
+      height: 100%;
+    }
+
+    .bar.p3 { background: #c4c4c4; width: 100%; }
+    .bar.p4 { background: #7f82e9; width: 61.7%; }
+    .bar.p6 { background: #96c297; width: 68.9%; }
+
+    .mini-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: clamp(0.68rem, 0.84vw, 0.9rem);
+      margin-top: 0.35rem;
+    }
+
+    .mini-table th,
+    .mini-table td {
+      border-bottom: 1px solid #d7dde4;
+      padding: 0.22rem 0.18rem;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    .mini-table th {
+      color: #0f3347;
+      font-weight: 800;
+      background: #f3f7fb;
+    }
+
+    .placeholder-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 0.5rem;
+      margin-top: 0.38rem;
+    }
+
+    .shot {
+      border: 1px dashed #8da0b3;
+      border-radius: 10px;
+      min-height: 3.6rem;
+      background:
+        repeating-linear-gradient(135deg, #f6f8fb, #f6f8fb 8px, #eef3f8 8px, #eef3f8 16px);
+      display: grid;
+      place-items: center;
+      text-align: center;
+      padding: 0.3rem;
+      font-size: clamp(0.67rem, 0.82vw, 0.9rem);
+      color: #42596f;
+      font-weight: 700;
+    }
+
+    .footer {
+      border-top: 2px solid #1f2f3f;
+      padding-top: 0.55rem;
+      display: grid;
+      grid-template-columns: 1.2fr 1.1fr 0.9fr;
+      gap: 0.8rem;
+      align-items: start;
+      font-size: clamp(0.64rem, 0.8vw, 0.9rem);
+    }
+
+    .footer h4 {
+      margin: 0 0 0.2rem 0;
+      font-family: "Source Serif 4", "Palatino Linotype", serif;
+      font-size: clamp(0.84rem, 1vw, 1.02rem);
+      color: #11283a;
+    }
+
+    .repo {
+      border: 1px solid #bdd5d0;
+      background: #eef9f7;
+      border-radius: 10px;
+      padding: 0.45rem;
+      font-weight: 700;
+      color: #0a4f47;
+      line-height: 1.25;
+      word-break: break-all;
+    }
+
+    .ref-list {
+      margin: 0;
+      padding-left: 1rem;
+      display: grid;
+      gap: 0.16rem;
+      color: #2a3441;
+    }
+
+    .qr-slot {
+      border: 1px dashed #77899e;
+      border-radius: 10px;
+      min-height: 4.8rem;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      color: #3f566f;
+      background: #f7fafc;
+      padding: 0.4rem;
+      font-weight: 700;
+    }
+
+    .small {
+      font-size: clamp(0.64rem, 0.78vw, 0.85rem);
+      color: #4a5665;
+    }
+
+    a {
+      color: #0b625a;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 2px;
+    }
+
+    @media (max-width: 1300px) {
+      .main-grid,
+      .footer,
+      .hero-top {
+        grid-template-columns: 1fr;
+      }
+
+      .placeholder-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media print {
+      @page {
+        size: 48in 36in;
+        margin: 0;
+      }
+
+      html,
+      body {
+        width: 48in;
+        height: 36in;
+        background: #ffffff;
+      }
+
+      .poster {
+        width: 48in;
+        height: 36in;
+        margin: 0;
+        padding: 0.65in;
+        border: none;
+        box-shadow: none;
+        gap: 0.42in;
+      }
+
+      .panel,
+      .hero,
+      .repo,
+      .kpi,
+      .shot,
+      .qr-slot {
+        break-inside: avoid;
+      }
+
+      a {
+        color: #0d4e69;
+        text-decoration: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <article class="poster">
+    <header class="hero">
+      <div class="hero-top">
+        <div>
+          <h1>Food Nutrition Estimation from a Single RGB Image</h1>
+          <p class="subtitle">Depth-aware geometric learning with direct and weight-first nutrient prediction for practical meal analysis.</p>
+        </div>
+        <div class="authors">
+          <div class="team">Team - CSC8851 Final Project</div>
+          <div>Bryan Chau · Loc Giang · Katelyn Truong</div>
+          <div>Georgia State University</div>
+          <div>nchau1@student.gsu.edu · lgiang2@student.gsu.edu · ltruong18@student.gsu.edu</div>
+        </div>
+      </div>
+      <div class="chips">
+        <span class="chip accent">Input: single RGB meal image</span>
+        <span class="chip accent">Output: calories, fat, protein, carbs</span>
+        <span class="chip">Split: 2597 train / 324 val / 326 test</span>
+        <span class="chip warm">Phase 4 calorie MAE: 119.79</span>
+        <span class="chip warm">Classifier top-1/top-5: 85.86% / 97.03%</span>
+        <span class="chip">Deployment: Gradio with editable portions + confidence</span>
+      </div>
+    </header>
+
+    <main class="main-grid">
+      <section class="col">
+        <div class="panel">
+          <h2>Problem and Goal</h2>
+          <p>Visual appearance alone is a weak proxy for mass and nutrition. Similar-looking dishes can have very different density and calorie content. We target practical, single-image estimation with uncertainty-aware output.</p>
+          <h3>Main Contributions</h3>
+          <ul>
+            <li>Depth-aware 9D geometric descriptor from YOLOv8 segmentation and MiDaS depth.</li>
+            <li>Two nutrient paths: direct nutrient regression and weight-first conversion.</li>
+            <li>Dish classification prior (EfficientNet-B0) with optional USDA density lookup.</li>
+            <li>MC Dropout uncertainty reporting integrated into the user interface.</li>
+            <li>Editable Gradio workflow for human-in-the-loop correction.</li>
+          </ul>
+        </div>
+
+        <div class="panel">
+          <h2>Data and Protocol</h2>
+          <p><strong>Targets:</strong> calories, fat, protein, carbohydrate.</p>
+          <p><strong>Evaluation split:</strong> 2597 train / 324 val / 326 test (fixed across comparisons).</p>
+          <p><strong>Primary metrics:</strong> MAE and RMSE (MAPE used only as secondary signal).</p>
+          <h3>Phased Development</h3>
+          <ul>
+            <li>Phase 3: ResNet-50 direct baseline.</li>
+            <li>Phase 4: Geometry-based MLP nutrient regression.</li>
+            <li>Phase 5: EfficientNet-B0 Food-101 classification.</li>
+            <li>Phase 6: Weight-first MLP then macro conversion.</li>
+          </ul>
+        </div>
+
+        <div class="panel">
+          <h2>Uncertainty and Deployment</h2>
+          <p>Inference uses MC Dropout with repeated stochastic forward passes. The app reports mean prediction and confidence intervals, and propagates weight uncertainty to nutrient uncertainty in the weight-first path.</p>
+          <div class="kpi-grid">
+            <div class="kpi">
+              <span class="name">App inference sampling</span>
+              <span class="value">T = 30</span>
+            </div>
+            <div class="kpi">
+              <span class="name">Notebook evaluation sampling</span>
+              <span class="value">T = 50</span>
+            </div>
+            <div class="kpi">
+              <span class="name">Reported interval</span>
+              <span class="value">mu ± sigma, mu ± 2 sigma</span>
+            </div>
+            <div class="kpi">
+              <span class="name">Fallback safety</span>
+              <span class="value">low-confidence labels suppressed</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="col">
+        <div class="panel">
+          <h2>Integrated Pipeline</h2>
+          <div class="pipeline-wrap">
+            <svg viewBox="0 0 1000 560" role="img" aria-label="Pipeline diagram">
+              <defs>
+                <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+                  <path d="M0,0 L0,6 L9,3 z" fill="#2a3b4a"></path>
+                </marker>
+                <style>
+                  .node { fill: #f5f7fa; stroke: #8392a3; stroke-width: 2; rx: 10; }
+                  .nodeA { fill: #eaf4f2; }
+                  .nodeB { fill: #f3ecf8; }
+                  .nodeC { fill: #f3f8ef; }
+                  .txt { font: 600 20px Manrope, sans-serif; fill: #233548; }
+                  .arr { stroke: #2a3b4a; stroke-width: 2.2; fill: none; marker-end: url(#arrow); }
+                </style>
+              </defs>
+
+              <rect class="node nodeA" x="28" y="46" width="170" height="70"></rect>
+              <text class="txt" x="113" y="84" text-anchor="middle">Input RGB</text>
+
+              <rect class="node" x="230" y="46" width="170" height="70"></rect>
+              <text class="txt" x="315" y="78" text-anchor="middle">YOLOv8-seg</text>
+              <text class="txt" x="315" y="102" text-anchor="middle">food mask</text>
+
+              <rect class="node" x="430" y="46" width="170" height="70"></rect>
+              <text class="txt" x="515" y="78" text-anchor="middle">MiDaS</text>
+              <text class="txt" x="515" y="102" text-anchor="middle">depth map</text>
+
+              <rect class="node" x="630" y="46" width="205" height="70"></rect>
+              <text class="txt" x="733" y="78" text-anchor="middle">9D geometric</text>
+              <text class="txt" x="733" y="102" text-anchor="middle">feature vector g</text>
+
+              <rect class="node nodeB" x="510" y="216" width="180" height="78"></rect>
+              <text class="txt" x="600" y="248" text-anchor="middle">Phase 5</text>
+              <text class="txt" x="600" y="272" text-anchor="middle">EfficientNet-B0</text>
+
+              <rect class="node" x="700" y="216" width="150" height="78"></rect>
+              <text class="txt" x="775" y="256" text-anchor="middle">Phase 4</text>
+
+              <rect class="node" x="860" y="216" width="130" height="78"></rect>
+              <text class="txt" x="925" y="256" text-anchor="middle">Phase 6</text>
+
+              <rect class="node" x="860" y="332" width="130" height="78"></rect>
+              <text class="txt" x="925" y="364" text-anchor="middle">USDA /</text>
+              <text class="txt" x="925" y="388" text-anchor="middle">constants</text>
+
+              <rect class="node nodeC" x="625" y="448" width="260" height="80"></rect>
+              <text class="txt" x="755" y="482" text-anchor="middle">Gradio output</text>
+              <text class="txt" x="755" y="506" text-anchor="middle">table + confidence</text>
+
+              <path class="arr" d="M198 81 L230 81"></path>
+              <path class="arr" d="M400 81 L430 81"></path>
+              <path class="arr" d="M600 81 L630 81"></path>
+
+              <path class="arr" d="M730 116 L600 216"></path>
+              <path class="arr" d="M740 116 L775 216"></path>
+              <path class="arr" d="M758 116 L925 216"></path>
+
+              <path class="arr" d="M925 294 L925 332"></path>
+              <path class="arr" d="M775 294 L755 448"></path>
+              <path class="arr" d="M600 294 L700 448"></path>
+              <path class="arr" d="M925 410 L812 448"></path>
+            </svg>
+          </div>
+          <p class="small">Inference merges direct nutrient prediction, weight-first conversion, and dish-class priors into one editable interface.</p>
+
+          <h3>Model Components</h3>
+          <table class="mini-table">
+            <thead>
+              <tr><th>Stage</th><th>Model</th><th>Output</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Segmentation</td><td>YOLOv8n-seg</td><td>Food mask(s)</td></tr>
+              <tr><td>Depth</td><td>MiDaS small</td><td>Relative depth map</td></tr>
+              <tr><td>Direct path</td><td>NutritionMLP</td><td>Calories, fat, protein, carb</td></tr>
+              <tr><td>Weight-first</td><td>WeightMLP</td><td>Weight then nutrient conversion</td></tr>
+              <tr><td>Classification</td><td>EfficientNet-B0</td><td>Top-k dish probabilities</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="col">
+        <div class="panel">
+          <h2>Quantitative Results</h2>
+          <div class="kpi-grid">
+            <div class="kpi"><span class="name">Phase 4 calories</span><span class="value">MAE 119.79 <span class="unit">kcal</span></span></div>
+            <div class="kpi"><span class="name">Phase 4 calories</span><span class="value">RMSE 158.69 <span class="unit">kcal</span></span></div>
+            <div class="kpi"><span class="name">Phase 3 to 4 gain</span><span class="value">-74.46 <span class="unit">MAE</span></span></div>
+            <div class="kpi"><span class="name">Phase 6 weight</span><span class="value">MAE 98.9 g</span></div>
+          </div>
+
+          <h3>Calorie MAE Comparison</h3>
+          <div class="bar-wrap">
+            <div class="bar-row"><span>Phase 3</span><div class="bar-track"><div class="bar p3"></div></div><span>194.25</span></div>
+            <div class="bar-row"><span>Phase 4</span><div class="bar-track"><div class="bar p4"></div></div><span>119.79</span></div>
+            <div class="bar-row"><span>Phase 6</span><div class="bar-track"><div class="bar p6"></div></div><span>133.8</span></div>
+          </div>
+
+          <h3>Phase 4 MAE/RMSE (test)</h3>
+          <table class="mini-table">
+            <thead>
+              <tr><th>Target</th><th>MAE</th><th>RMSE</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Calories</td><td>119.79</td><td>158.69</td></tr>
+              <tr><td>Fat</td><td>7.67</td><td>10.66</td></tr>
+              <tr><td>Protein</td><td>11.01</td><td>15.75</td></tr>
+              <tr><td>Carb</td><td>11.14</td><td>14.35</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="panel">
+          <h2>Classification and Demo</h2>
+          <p><strong>Phase 5 EfficientNet-B0:</strong> top-1 85.86%, top-5 97.03%, best epoch 23.</p>
+          <p><strong>Phase 6 derived MAE:</strong> calories 133.8, fat 8.1, protein 11.9, carb 10.9.</p>
+          <p class="small"><strong>App screenshots to insert:</strong> use representative screens from upload to edited results.</p>
+
+          <div class="placeholder-grid">
+            <div class="shot">Slot A<br />Landing / image upload</div>
+            <div class="shot">Slot B<br />Dish classification + top-k</div>
+            <div class="shot">Slot C<br />Mask/depth visualization</div>
+            <div class="shot">Slot D<br />Initial nutrition output table</div>
+            <div class="shot">Slot E<br />Ingredient portion editing</div>
+            <div class="shot">Slot F<br />Updated totals + confidence</div>
+          </div>
+
+          <h3>Error Patterns</h3>
+          <ul>
+            <li>Mixed dishes with overlapping components.</li>
+            <li>Strong occlusion or unusual camera viewpoints.</li>
+            <li>Foods with similar geometry but different density.</li>
+          </ul>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div>
+        <h4>Conclusion</h4>
+        <p>The final integrated system balances predictive accuracy and interpretability by combining segmentation, depth cues, direct nutrient regression, weight-first reasoning, and uncertainty-aware reporting in a practical Gradio workflow.</p>
+        <div class="repo">
+          Project repository:<br />
+          <a href="https://github.com/bryanchau11/csc8851_spring26_finalProject">github.com/bryanchau11/csc8851_spring26_finalProject</a>
+        </div>
+      </div>
+
+      <div>
+        <h4>References</h4>
+        <ol class="ref-list">
+          <li>Bossard et al., Food-101, ECCV 2014.</li>
+          <li>Tan and Le, EfficientNet, ICML 2019.</li>
+          <li>MiDaS repository, isl-org/MiDaS.</li>
+          <li>Ultralytics YOLOv8 documentation.</li>
+          <li>Gal and Ghahramani, Dropout uncertainty, ICML 2016.</li>
+          <li>USDA FoodData Central API Guide.</li>
+        </ol>
+      </div>
+
+      <div>
+        <h4>Presentation Notes</h4>
+        <div class="qr-slot">Place QR code here<br />for live demo or repo</div>
+        <p class="small">Print tip: In browser print settings, choose landscape, enable background graphics, and use 100% scale.</p>
+      </div>
+    </footer>
+  </article>
+</body>
+</html>

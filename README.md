@@ -1,6 +1,6 @@
 # CSC8851 Spring 2026 — Final Project: Food Nutrition Estimator 🍕
 
-> **Team**: Bryan Chau  
+> **Team**: Bryan Chau, Katelyn Truong, Loc Giang  
 > **Course**: CSC8851 — Deep Learning  
 > **Semester**: Spring 2026
 

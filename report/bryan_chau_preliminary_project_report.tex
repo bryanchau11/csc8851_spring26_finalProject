@@ -1,731 +1,418 @@
-% ============================================================
-%  CSC8851 Spring 2026 — Preliminary Project Report
-%  Author : Bryan Chau, Katelyn Truong, Loc Giang
-%  Format : IEEE CVPR 2-column (10pt, letterpaper)
-% ============================================================
 \documentclass[10pt,twocolumn,letterpaper]{article}
 
-% ── Page geometry ────────────────────────────────────────────
-\usepackage[
-  top=1in,
-  bottom=1in,
-  left=0.75in,
-  right=0.75in,
-  columnsep=0.25in
-]{geometry}
-
-% ── Typography & encoding ────────────────────────────────────
+\usepackage[final]{cvpr}
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
-\usepackage{times}           % Times New Roman (IEEE standard)
-\usepackage{microtype}
-
-% ── Math ─────────────────────────────────────────────────────
-\usepackage{amsmath, amssymb, bm}
-
-% ── Figures & tables ─────────────────────────────────────────
+\usepackage{times}
+\usepackage{epsfig}
 \usepackage{graphicx}
+\usepackage{amsmath,amssymb}
 \usepackage{booktabs}
 \usepackage{multirow}
-\usepackage{caption}
-\usepackage{subcaption}
-\usepackage[table]{xcolor}
+\usepackage{microtype}
 \usepackage{tikz}
-\usetikzlibrary{shapes.geometric, arrows.meta, positioning, fit, backgrounds}
-
-% ── URLs & hyperlinks ────────────────────────────────────────
-\usepackage[hidelinks]{hyperref}
+\usetikzlibrary{arrows.meta,positioning,fit,shapes.geometric}
+\usepackage[pagebackref,breaklinks,colorlinks]{hyperref}
 \usepackage{url}
 
-% ── Section title spacing ────────────────────────────────────
-\usepackage{titlesec}
-\titlespacing*{\section}{0pt}{8pt plus 2pt minus 2pt}{4pt plus 1pt}
-\titlespacing*{\subsection}{0pt}{6pt plus 2pt}{2pt plus 1pt}
+\def\cvprPaperID{8851}
+\def\confName{CSC8851 Final Project}
+\def\confYear{2026}
 
-% ── Paragraph spacing ────────────────────────────────────────
-\setlength{\parskip}{2pt}
-\setlength{\parindent}{1em}
-
-% ── Header / footer ──────────────────────────────────────────
-\usepackage{fancyhdr}
-\pagestyle{fancy}
-\fancyhf{}
-\renewcommand{\headrulewidth}{0pt}
-\fancyfoot[C]{\thepage}
-
-% ── Algorithm ────────────────────────────────────────────────
-\usepackage{algorithm}
-\usepackage{algpseudocode}
-
-% ── Convenient shorthands ────────────────────────────────────
-\newcommand{\eg}{\textit{e.g.},\xspace}
-\newcommand{\ie}{\textit{i.e.},\xspace}
-\newcommand{\etal}{\textit{et al.}\xspace}
-\newcommand{\wrt}{w.r.t.\xspace}
-\usepackage{xspace}
-
-% ── Caption style ────────────────────────────────────────────
-\captionsetup{font=small, labelfont=bf, skip=4pt}
-
-% ─────────────────────────────────────────────────────────────
-\begin{document}
-
-% ── Title block ──────────────────────────────────────────────
-\title{%
-  \vspace{-0.4cm}
-  {\large\textbf{Food Nutrition Estimation from a Single RGB Image:\\
-  A Weight-First Pipeline with Geometric Feature Extraction}}%
-  \vspace{-0.2cm}
+\title{Team Final Project Report: Food Nutrition Estimation from a Single RGB Image}
+\author{
+Bryan Chau\\
+Georgia State University\\
+\texttt{nchau1@student.gsu.edu}
+\and
+Loc Giang\\
+Georgia State University\\
+\texttt{lgiang2@student.gsu.edu}
+\and
+Katelyn Truong\\
+Georgia State University\\
+\texttt{ltruong18@student.gsu.edu}
 }
-
-\author{%
-  \begin{tabular}{ccc}
-    \begin{minipage}{0.31\linewidth}\centering\small
-      \textbf{Bryan Chau}\\[2pt]
-      \texttt{nchau1@student.gsu.edu}\\[2pt]
-      \textbf{PantherID: 002508179}
-    \end{minipage} &
-    \begin{minipage}{0.31\linewidth}\centering\small
-      \textbf{Loc Giang}\\[2pt]
-      \texttt{lgiang2@student.gsu.edu}\\[2pt]
-      \textbf{PantherID: 002505346}
-    \end{minipage} &
-    \begin{minipage}{0.31\linewidth}\centering\small
-      \textbf{Katelyn Truong}\\[2pt]
-      \texttt{ltruong18@student.gsu.edu}\\[2pt]
-      \textbf{PantherID: 002852993}
-    \end{minipage} \\
-  \end{tabular}
-}
-
 \date{}
-\maketitle
-\thispagestyle{fancy}
 
-% ── Abstract ─────────────────────────────────────────────────
+\begin{document}
+\maketitle
+
 \begin{abstract}
-Accurate nutritional estimation from food photographs has broad applications in
-dietary monitoring and public health, yet remains challenging due to the
-diversity of portion sizes, food types, and imaging conditions.  We present a
-multi-stage deep learning pipeline that estimates calories, fat, protein, and
-carbohydrates from a single RGB image.  The system first segments the food
-region with YOLOv8-seg, estimates relative depth with MiDaS, and extracts nine
-geometric features encoding plate coverage and food volume.  A lightweight
-4-layer MLP (WeightMLP) then predicts dish weight in grams; macros are derived
-by multiplying the predicted weight by per-nutrient density constants computed
-from the Nutrition5K dataset.  A food-type classifier (EfficientNet-B0
-fine-tuned on Food-101) triggers per-food density lookup from the USDA
-FoodData Central API, replacing global constants when a match is found.  MC
-Dropout propagates uncertainty through all stages.  On the Nutrition5K test
-split ($n{=}325$), the weight-first pipeline achieves a calorie MAE of
-approximately \textbf{119.8 kcal} and an RMSE of \textbf{158.7 kcal}, with
-the ensemble reducing variance relative to each standalone stage.  A live
-Gradio demo allows upload of arbitrary food photos and displays per-food
-calorie breakdowns with uncertainty intervals.
+This report presents our final team system for nutrition estimation from a single RGB meal image. The pipeline combines YOLOv8-seg masking, MiDaS depth, a 9D geometric descriptor, direct nutrient regression (phase 4), and weight-first regression with nutrient conversion (phase 6), with MC Dropout for uncertainty. On the 326-dish test split, phase 4 achieves calorie MAE/RMSE 119.79/158.69 and improves calorie MAE by 74.46 over the matched phase-3 baseline; phase 6 obtains weight MAE/RMSE 98.9 g/152.2 g with derived calorie MAE 133.8. The phase-5 EfficientNet-B0 classifier reaches 85.86\% top-1 and 97.03\% top-5, and the integrated system is deployed in Gradio with editable portions and confidence-aware outputs.
 \end{abstract}
 
-% ─────────────────────────────────────────────────────────────
 \section{Introduction}
-\label{sec:intro}
-% ─────────────────────────────────────────────────────────────
+Automated food nutrition estimation remains difficult because visual appearance is not a direct proxy for mass or composition. Portion size can change significantly with camera distance and plate arrangement, and dishes with similar color or shape can have very different energy density.
 
-Dietary tracking is a cornerstone of managing chronic disease, athletic
-performance, and weight control.  Manual food logging is burdensome and prone
-to systematic underreporting~\cite{dhurandhar2015}; an automatic vision-based
-estimator that operates from a simple photograph could remove this friction
-entirely.  The problem is non-trivial: two dishes that look geometrically
-similar (\eg,\, a bowl of ramen vs.\ a bowl of salad) carry vastly different
-caloric loads, while the same food photographed at different distances or
-viewing angles yields wildly varying apparent sizes.
+Our final team goal is practical single-image estimation of calories, fat, protein, and carbohydrates with uncertainty reporting. The project repository is:
+\begin{center}
+\url{https://github.com/bryanchau11/csc8851_spring26_finalProject}
+\end{center}
 
-\paragraph{Challenge statement.}
-Given a single uncalibrated RGB image $\mathbf{I} \in \mathbb{R}^{H \times W
-\times 3}$, produce predictions
-\begin{equation}
-  \hat{\mathbf{n}} = \bigl(\hat{n}_{\text{cal}},\;
-                           \hat{n}_{\text{fat}},\;
-                           \hat{n}_{\text{pro}},\;
-                           \hat{n}_{\text{carb}}\bigr)
-  \label{eq:problem}
-\end{equation}
-where each quantity is in kilocalories or grams respectively, along with a
-calibrated uncertainty estimate $\hat{\boldsymbol{\sigma}}$.
+We implemented a multi-phase system with graceful fallback when checkpoints are missing. The final integrated mode (``full'') combines phases 4, 5, and 6 in one app.
 
-\paragraph{Key insight.}
-We decouple the estimation into two sub-problems.  First, predict dish
-\emph{weight} $\hat{w}$ from purely physical (geometric) signals — food mask
-area and depth statistics — which is a dimensionality reduction from raw pixels
-to a scalar with clear physical meaning.  Second, multiply by food-class
-density constants to recover macros:
-\begin{equation}
-  \hat{n}_k = \hat{w} \cdot \bar{c}_k,
-  \qquad k \in \{\text{cal, fat, pro, carb}\}.
-  \label{eq:weight_first}
-\end{equation}
-This separation is more interpretable and more easily improved (better density
-constants from a larger food database) than end-to-end calorie regression.
+\textbf{Main contributions.}
+\begin{itemize}
+\item A depth-aware geometric feature extractor from segmentation masks and MiDaS predictions.
+\item Two complementary nutrient paths: direct macro regression and weight-first conversion.
+\item A food-type classifier used for top-$k$ dish labels and USDA density prior retrieval.
+\item End-to-end uncertainty propagation with MC Dropout and user-facing confidence display.
+\item A production-style Gradio interface for image upload, nutrient prediction, and ingredient editing.
+\end{itemize}
 
-\paragraph{Scope of this report.}
-This preliminary report documents the motivation, related literature, and
-complete system design.  Quantitative results on the Nutrition5K test split are
-reported where training has been completed; placeholder figures are included for
-experiments still in progress.
-
-% ─────────────────────────────────────────────────────────────
 \section{Related Work}
-\label{sec:related}
-% ─────────────────────────────────────────────────────────────
+Prior approaches generally fall into three categories.
 
-\subsection{Food Recognition}
+\textbf{Image-level food recognition.}
+Food-101 and related classification benchmarks motivate transfer learning with CNN backbones such as EfficientNet~\cite{bossard2014food101,tan2019efficientnet}. These methods identify dish category well but do not directly solve portion estimation.
 
-Deep convolutional networks dominate food-image classification.  Bossard~\etal
-\cite{bossard2014food101} introduced Food-101, a benchmark of 101\,000 images
-across 101 categories, and reported $56.4\%$ top-1 accuracy with
-\textit{Random Forests on CNN features}; subsequent fine-tuning of VGGNet and
-ResNet architectures pushed accuracy above 85\%.  EfficientNet~\cite{tan2019efficientnet},
-the backbone we adopt for food-type classification, achieves state-of-the-art
-accuracy at an order-of-magnitude lower parameter count than VGG/ResNet through
-compound coefficient scaling of depth, width, and resolution.  More recently,
-Vision Transformers (ViTs)~\cite{dosovitskiy2020vit} and CLIP~\cite{clip2021}
-have been applied to zero-shot food recognition, but their compute requirements
-make them impractical for the lightweight real-time demo we target.
+\textbf{Nutrition regression from meal images.}
+Nutrition5K-style benchmarks frame calorie/macronutrient prediction from meal photos~\cite{nutrition5kweb}. Direct RGB-to-nutrients models can work, but they may conflate food identity and quantity, reducing robustness under viewpoint changes.
 
-\subsection{Portion-Size Estimation and Depth}
+\textbf{Segmentation and geometric cues.}
+Modern instance segmentation (YOLOv8) and monocular depth estimators (MiDaS) provide useful structure for volume-related features from one view~\cite{ultralytics2023,midasrepo}. Our method uses these signals to improve amount estimation before nutrient conversion.
 
-Accurate calorie prediction requires estimating \emph{how much} food is present,
-not only what it is.  Early approaches relied on calibration objects (\eg,\, a
-known-size marker on the plate)~\cite{dehais2017}.  Later systems used stereo
-RGB-D cameras; the Nutrition5K dataset~\cite{thames2021nutrition5k} collected
-overhead RGBD images of cafeteria dishes with ground-truth macro labels,
-enabling supervised learning of geometric features directly.  Monocular depth
-estimation removes the need for specialised hardware.  MiDaS~\cite{ranftl2020midas}
-provides robust relative depth from a single RGB image by training on multiple
-datasets with mixed-scale supervision; we use the lightweight
-\textit{MiDaS-small} variant for efficiency.
-
-\subsection{Food Volume and Nutrition Estimation}
-
-He~\etal~\cite{he2021nutritionfromimage} combine 3-D food reconstruction with a
-food-ingredient database for calorie estimation, achieving MAEs of roughly
-$100$--$150\,\text{kcal}$ on controlled benchmarks.  The NutriNet
-system~\cite{ciocca2017nutrinet} uses 2-D image features with a nutrition
-knowledge graph.  INGR-360~\cite{ingred360} estimates ingredient quantities from
-360° photos.  Compared with these systems, our approach is designed to run on
-consumer hardware (CPU) without depth sensors or food databases requiring manual
-curation, relying only on freely available USDA FoodData Central for density
-constants.
-
-\subsection{Uncertainty Quantification in Neural Networks}
-
-MC Dropout~\cite{gal2016mcdropout} approximates Bayesian inference by sampling
-$T$ forward passes with dropout active at test time.  The sample mean and
-standard deviation provide a lightweight uncertainty estimate without additional
-parameters.  For regression tasks with uncertainty that propagates linearly through a
-multiplication ($\hat{n}_k = \hat{w} \cdot \bar{c}_k$, Eq.~\ref{eq:weight_first}),
-the macro uncertainty is simply
-$\hat{\sigma}_{n_k} = \hat{\sigma}_w \cdot \bar{c}_k$,
-where $\hat{\sigma}_w$ is the MC Dropout standard deviation of the weight
-prediction.  Deep Ensembles~\cite{lakshminarayanan2017ensembles} offer stronger
-calibration but at higher cost; we approximate ensemble diversity by combining
-the weight-first stage (Phase~6) with the direct regression stage (Phase~4).
-
-\subsection{Object Detection and Segmentation}
-
-YOLOv8-seg~\cite{yolov8} extends the single-stage YOLO object detection
-framework with an additional segmentation head, producing polygon masks at
-real-time speeds.  We use the segmentation masks to isolate the food region from
-the background before extracting depth statistics, substantially reducing noise
-from non-food depth values (plates, cutlery, table surface).
-
-% ─────────────────────────────────────────────────────────────
-\section{Dataset}
-\label{sec:dataset}
-% ─────────────────────────────────────────────────────────────
-
-\paragraph{Nutrition5K~\cite{thames2021nutrition5k}.}
-Our primary training dataset consists of 3{,}247 overhead RGBD images of
-Google cafeteria dishes.  Each dish is annotated with ground-truth mass (grams),
-calories (kcal), fat (g), protein (g), and carbohydrates (g).  Images are
-captured with a RealSense D415 camera at a fixed overhead angle under controlled
-lighting.  Summary statistics are given in Table~\ref{tab:dataset}.
-
-\begin{table}[h]
-  \centering
-  \caption{Nutrition5K dataset statistics (valid dishes, $n{=}3247$).}
-  \label{tab:dataset}
-  \setlength{\tabcolsep}{5pt}
-  \small
-  \begin{tabular}{lrrr}
-    \toprule
-    \textbf{Target} & \textbf{Mean} & \textbf{Std} & \textbf{Range} \\
-    \midrule
-    Weight (g)      & 280   & 152  & 35–1200  \\
-    Calories (kcal) & 312   & 201  & 10–1800  \\
-    Fat (g)         & 16.0  & 12.5 & 0–120    \\
-    Protein (g)     & 21.0  & 14.8 & 0–110    \\
-    Carbs (g)       & 26.1  & 21.3 & 0–200    \\
-    \bottomrule
-  \end{tabular}
-\end{table}
-
-\paragraph{Density constants.}
-Per-gram nutrient densities $\bar{c}_k$ are computed as the trimmed mean
-($3\sigma$ outlier removal) of $n^{(i)}_k / w^{(i)}$ over all valid dishes:
+\section{Dataset and Experimental Protocol}
+\subsection{Data and Targets}
+Our nutrition pipeline is built around Nutrition5K-derived records containing meal-level nutrient labels:
 \begin{equation}
-  \bar{c}_k = \frac{1}{|\mathcal{D}_k|}
-              \sum_{i \in \mathcal{D}_k}
-              \frac{n^{(i)}_k}{w^{(i)}},
-  \label{eq:constants}
+\mathbf{y}=[\text{calories},\text{fat},\text{protein},\text{carb}].
+\label{eq:targets}
 \end{equation}
-where $\mathcal{D}_k$ excludes outliers beyond $\bar{c}_k \pm 3\sigma_k$.
-The resulting global constants are:
-$\bar{c}_{\text{cal}} = 1.147$\,kcal/g,
-$\bar{c}_{\text{fat}} = 0.057$\,g/g,
-$\bar{c}_{\text{pro}} = 0.075$\,g/g,
-$\bar{c}_{\text{carb}} = 0.093$\,g/g.
 
-\paragraph{Food-101~\cite{bossard2014food101}.}
-101\,000 images across 101 food categories (750 train / 250 test per class)
-are used exclusively to fine-tune the EfficientNet-B0 food classifier (Phase~5).
-No nutritional labels exist in Food-101; the dataset contributes only the
-food-type decision used to trigger USDA density lookup.
+Equation~\eqref{eq:targets} defines the four meal-level targets. The final phase-4 notebook evaluation logs a split of 2597 train / 324 val / 326 test dishes. We report MAE and RMSE as primary metrics and include MAPE only as a secondary signal, because near-zero nutrient labels can inflate percentage errors.
 
-\paragraph{USDA FoodData Central.}
-Per-food calorie and macro densities are retrieved live from the USDA
-FoodData Central REST API~\cite{usda_fdc}.  A two-step strategy is used: (1)
-query the full dish name and take the median kcal/g of FNDDS results; (2) if
-no result, query individual ingredient keywords and take the maximum result.  A
-local JSON cache avoids redundant API calls.
+\subsection{Phased Development}
+The codebase follows six phases:
+\begin{itemize}
+\item \textbf{Phase 3}: ResNet-50 direct nutrient baseline.
+\item \textbf{Phase 4}: geometric-feature MLP direct regression.
+\item \textbf{Phase 5}: EfficientNet-B0 food classifier (Food-101).
+\item \textbf{Phase 6}: weight-first MLP with nutrient conversion constants.
+\end{itemize}
+Phases 1--2 focus on data exploration and feature engineering; phase 7 handles optional ingredient segmentation training artifacts.
 
-\paragraph{Splits.}
-All Nutrition5K experiments use an 80/10/10 stratified random split with
-\texttt{seed=42}, producing 2598 training, 325 validation, and 324 test dishes.
+Training was compute-intensive, so major jobs were executed on Kaggle GPU instances. Classifier/segmentation training and ablation reruns required multi-hour sessions before checkpoint selection, and final weights were exported for local inference in the Gradio app. Figure~\ref{fig:epoch_training} marks where epoch-level training curves should be inserted.
 
-% ─────────────────────────────────────────────────────────────
-\section{Method}
-\label{sec:method}
-% ─────────────────────────────────────────────────────────────
-
-Figure~\ref{fig:pipeline} shows the full inference pipeline.  We describe each
-stage in turn.
-
-% ── TikZ Pipeline diagram ──────────────────────────────────────
 \begin{figure}[t]
 \centering
+\begin{minipage}[c]{0.48\columnwidth}
+\centering
+\includegraphics[width=\linewidth]{figures/p6_epoch_loss.png}\\[-1pt]
+\scriptsize (a) Train/validation loss
+\end{minipage}\hfill
+\begin{minipage}[c]{0.48\columnwidth}
+\centering
+\includegraphics[width=\linewidth]{figures/p6_epoch_mae.png}\\[-1pt]
+\scriptsize (b) Validation MAE (grams)
+\end{minipage}
+\caption{Epoch-level training curves from the Kaggle GPU run used for checkpoint selection in Phase 6. Plot (a) shows train/validation loss convergence and Plot (b) shows validation MAE trend across 60 epochs.}
+\label{fig:epoch_training}
+\end{figure}
+
+\section{Method}
+\subsection{Pipeline Overview}
+Given RGB image $I$, we estimate a mask $M$ and depth map $D$. A geometric encoder computes feature vector $g\in\mathbb{R}^9$. Two nutrient paths are then computed:
+\begin{align}
+\hat{\mathbf{n}} &= f_\theta(g), \label{eq:direct_path}\\
+\hat{w} &= h_\phi(g), \qquad \hat{n}_j = \hat{w}\rho_j. \label{eq:weight_path}
+\end{align}
+Equation~\eqref{eq:direct_path} is the direct nutrient regression path, and Eq.~\eqref{eq:weight_path} is the weight-first conversion path with per-gram constants $\rho_j$. Figure~\ref{fig:pipeline} illustrates the full system data flow, and Table~\ref{tab:components} summarizes each module used during final inference.
+
+\begin{figure*}[t]
+\centering
+\resizebox{0.97\textwidth}{!}{%
 \begin{tikzpicture}[
-  node distance=0.45cm and 0.3cm,
-  box/.style={rectangle, rounded corners=2pt, minimum width=1.8cm,
-              minimum height=0.55cm, text centered, font=\footnotesize,
-              draw=black!70, fill=blue!8},
-  greenbox/.style={box, fill=green!12},
-  orangebox/.style={box, fill=orange!14},
-  redbox/.style={box, fill=red!10},
-  purplebox/.style={box, fill=violet!12},
-  arr/.style={-Stealth, thick, draw=black!60},
-  every node/.style={font=\footnotesize}
+  block/.style={draw,rounded corners,minimum width=2.35cm,minimum height=0.9cm,align=center,font=\small,fill=gray!10},
+  io/.style={draw,rounded corners,minimum width=2.2cm,minimum height=0.9cm,align=center,font=\small,fill=blue!8},
+  outbox/.style={draw,rounded corners,minimum width=3.0cm,minimum height=0.9cm,align=center,font=\small,fill=green!10},
+  arr/.style={-Latex,thick}
 ]
+\node[io]    (img)   at (0.0,0.0)   {Input\\RGB image};
+\node[block] (seg)   at (3.1,0.0)   {YOLOv8-seg\\food mask};
+\node[block] (depth) at (6.2,0.0)   {MiDaS\\depth map};
+\node[block] (feat)  at (9.5,0.0)   {9D geometric\\feature vector $g$};
 
-\node[box]      (img)   {Input RGB};
-\node[greenbox, below=of img]   (yolo)  {YOLOv8-seg};
-\node[greenbox, right=1.4cm of yolo] (midas) {MiDaS-small};
-\node[box, below=0.7cm of yolo, xshift=0.7cm] (feat)  {9 Geometric Features};
-\node[orangebox, below=of feat] (wmlp)  {WeightMLP};
-\node[orangebox, below=of wmlp] (wpred) {$\hat{w}$ (grams)};
-\node[purplebox, left=1.2cm of wpred]  (eff)   {EfficientNet-B0};
-\node[purplebox, below=0.55cm of eff]  (usda)  {USDA API};
-\node[redbox,    below=0.7cm of wpred]  (eq)    {$\hat{\mathbf{n}} = \hat{w} \cdot \bar{\mathbf{c}}$};
-\node[redbox,    below=of eq]           (out)   {Calories / Fat / Protein / Carbs};
+\node[block] (p5)    at (8.0,-2.3)  {Phase 5\\EfficientNet-B0\\top-$k$ label};
+\node[block] (p4)    at (10.6,-2.3) {Phase 4\\NutritionMLP};
+\node[block] (p6)    at (13.2,-2.3) {Phase 6\\WeightMLP};
+\node[block] (const) at (16.1,-2.3) {USDA/constants\\density lookup};
 
-\draw[arr] (img)   -- (yolo);
-\draw[arr] (img.east) -- ++(0.4,0) |- (midas.east);
-\draw[arr] (yolo)  -- (feat.north west);
-\draw[arr] (midas) -- (feat.north east);
-\draw[arr] (feat)  -- (wmlp);
-\draw[arr] (wmlp)  -- (wpred);
-\draw[arr] (img.west) -- ++(-0.4, 0) |- (eff.west);
-\draw[arr] (eff)   -- (usda);
-\draw[arr] (usda.south) -- ++(0,-0.15) -| (eq.west);
-\draw[arr] (wpred) -- (eq);
-\draw[arr] (eq)    -- (out);
-\end{tikzpicture}
-\caption{Full inference pipeline. YOLOv8-seg provides the food mask; MiDaS
-  provides relative depth. Nine geometric features are concatenated and passed
-  to WeightMLP. EfficientNet-B0 identifies the food type; per-food density
-  constants $\bar{\mathbf{c}}$ are fetched from the USDA API (or fall back to
-  global Nutrition5K constants).  Final macros are computed as
-  $\hat{\mathbf{n}} = \hat{w} \cdot \bar{\mathbf{c}}$.}
+\node[outbox] (ui)   at (13.2,-4.5) {Gradio output\\table + CI};
+
+\draw[arr] (img) -- (seg);
+\draw[arr] (seg) -- (depth);
+\draw[arr] (depth) -- (feat);
+
+\draw[arr] (feat) -- (p5);
+\draw[arr] (feat) -- (p4);
+\draw[arr] (feat) -- (p6);
+\draw[arr] (p6) -- (const);
+
+\draw[arr] (p4) -- (ui);
+\draw[arr] (p5) |- (ui.west);
+\draw[arr] (const) |- (ui.east);
+\end{tikzpicture}%
+}
+\caption{Final integrated inference flow in our team system. Starting from one RGB image, YOLOv8-seg generates a food mask, MiDaS provides relative depth, and a 9D geometric descriptor is sent to phase-4 (direct nutrient regression), phase-6 (weight-first prediction), and phase-5 (food classification). The Gradio layer merges these outputs with USDA/constants lookup and reports nutrients with confidence intervals.}
 \label{fig:pipeline}
-\end{figure}
+\end{figure*}
 
-\subsection{Stage 1 — Food Segmentation (YOLOv8-seg)}
-\label{sec:yolo}
+\begin{table}[t]
+\centering
+\caption{Final integrated pipeline components and their outputs. This table is self-contained and maps each stage to the exact artifact consumed by downstream modules during inference.}
+\label{tab:components}
+\begin{tabular}{lll}
+\toprule
+Stage & Model & Output \\
+\midrule
+Segmentation & YOLOv8n-seg & Food mask(s) \\
+Depth & MiDaS$_{small}$ & Relative depth map \\
+Direct regression & NutritionMLP & $\hat{\mathbf{n}}$ \\
+Weight-first & WeightMLP & $\hat{w}$ then $\hat{\mathbf{n}}$ \\
+Dish type & EfficientNet-B0 & Top-$k$ label probs \\
+External prior & USDA cache/API & food-specific density \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-We apply \textbf{YOLOv8n-seg}~\cite{yolov8} (nano variant, 3.1M parameters)
-to the input image to obtain a binary food mask
-$M \in \{0,1\}^{H \times W}$.
-Only COCO classes corresponding to food items (IDs 46--55: banana, apple,
-sandwich, orange, broccoli, carrot, hot dog, pizza, donut, cake; plus bowl ID
-45) are retained.  If no food-class box is detected, all detected bounding
-boxes are treated as food.  If no boxes are detected at all, a central ellipse
-covering 60\% of the short image dimension is used as a fallback mask.
+\subsection{Feature and Model Details}
+The app implementation in \path{app/core\_models.py} defines the phase-4 and phase-6 MLPs as:
+\begin{itemize}
+\item Input 9 features
+\item Hidden layers: 128 $\rightarrow$ 64 $\rightarrow$ 32
+\item BatchNorm + ReLU + Dropout (0.2)
+\item Output: 4 nutrients (phase 4) or 1 scalar weight (phase 6)
+\end{itemize}
 
-\subsection{Stage 2 — Depth Estimation (MiDaS)}
-\label{sec:midas}
+The phase-5 classifier uses EfficientNet-B0 features with a dropout-MLP head for 101 Food-101 classes.
 
-\textbf{MiDaS-small}~\cite{ranftl2020midas} (Efficient-Net encoder, 21M
-parameters) produces a relative inverse-depth map $D \in \mathbb{R}^{H \times
-W}$ normalised to $[0,1]$.  When a calibrated RealSense depth image is
-available in the dataset (\texttt{depth\_color.png}), it is loaded directly and
-converted to normalised float; MiDaS serves as the fallback for real-world
-photos.
-
-\subsection{Stage 3 — Geometric Feature Extraction}
-\label{sec:features}
-
-Nine scalar features are computed from $M$ and $D$:
-
-\begin{equation}
-  \mathbf{f} = \bigl[
-    \underbrace{a_M}_{\text{mask frac}},\;
-    \underbrace{\mu_D,\; \sigma_D,\; \text{med}_D,\; \max_D}_{\text{global depth}},\;
-    \underbrace{\mu_{D|M},\; \sigma_{D|M},\; \text{med}_{D|M},\; \max_{D|M}}_{\text{masked depth}}
-  \bigr]^\top
-  \label{eq:features}
-\end{equation}
-
-where $a_M = \frac{1}{HW}\sum_{p} M_p$ is the fraction of the image covered by
-the food mask, and subscript $D|M$ denotes statistics computed only over pixels
-where $M_p = 1$.  The rationale is that $a_M$ encodes the
-\emph{footprint} of the dish, while the masked depth statistics encode its
-\emph{height profile}, together providing a proxy for volume.
-
-Features are standardised using mean and standard deviation computed on the
-training split and saved to \texttt{weight\_feat\_stats.npz}.
-
-\subsection{Stage 4 — WeightMLP}
-\label{sec:weightmlp}
-
-\textbf{WeightMLP} maps $\mathbf{f} \in \mathbb{R}^9$ to a scalar weight
-prediction $\hat{w} \in \mathbb{R}_{>0}$ (grams):
-\begin{equation}
-  \hat{w} = \text{WeightMLP}(\mathbf{f};\, \boldsymbol{\theta}),
-  \qquad \hat{w} \leftarrow \max(\hat{w},\, 10).
-  \label{eq:weightmlp}
-\end{equation}
-The architecture is:
-\[
-  \underbrace{9}_{\text{in}}
-  \xrightarrow{\text{BN, ReLU, DO}}
-  128
-  \xrightarrow{\text{BN, ReLU, DO}}
-  64
-  \xrightarrow{\text{BN, ReLU, DO}}
-  32
-  \xrightarrow{\;\;}
-  \underbrace{1}_{\hat{w}}
-\]
-where BN is Batch Normalisation, ReLU is the activation, and DO is
-Dropout($p{=}0.2$).  The network has \textbf{12,481 parameters} in total.
-
-Training minimises the Huber (SmoothL1) loss:
-\begin{equation}
-  \mathcal{L}_{\text{Huber}}(\hat{w}, w) =
-  \begin{cases}
-    \tfrac{1}{2}(\hat{w}-w)^2, & |\hat{w}-w| \le 1, \\
-    |\hat{w}-w| - \tfrac{1}{2}, & \text{otherwise},
-  \end{cases}
-  \label{eq:huber}
-\end{equation}
-which is robust to the heavy-tailed weight distribution visible in
-Table~\ref{tab:dataset}.
-
-\paragraph{MC Dropout uncertainty.}
-At inference, Dropout layers remain active and $T{=}30$ forward passes are
-executed:
+\subsection{Uncertainty Modeling}
+At inference, dropout remains active for $T$ stochastic forward passes (typically $T=30$ in app inference and $T=50$ in notebook evaluation). For prediction samples $\{\hat{y}^{(t)}\}_{t=1}^T$:
 \begin{align}
-  \hat{w} &= \frac{1}{T}\sum_{t=1}^{T} w^{(t)}, \label{eq:mc_mean}\\
-  \hat{\sigma}_w &= \sqrt{\frac{1}{T-1}\sum_{t=1}^{T}(w^{(t)} - \hat{w})^2}. \label{eq:mc_std}
+\mu &= \frac{1}{T}\sum_t \hat{y}^{(t)}, \label{eq:mc_mean}\\
+\sigma^2 &= \frac{1}{T-1}\sum_t\left(\hat{y}^{(t)}-\mu\right)^2. \label{eq:mc_var}
 \end{align}
-The prediction is reported as $\hat{w} \pm 2\hat{\sigma}_w$ (approximate 95\%
-interval).
+Equations~\eqref{eq:mc_mean} and \eqref{eq:mc_var} are the Monte Carlo mean and sample variance estimates~\cite{gal2016dropout}. We report confidence as approximately $\mu \pm 2\sigma$.
 
-\paragraph{Serving-size fallback.}
-Three conditions trigger replacement of $\hat{w}$ with a reference portion size
-$w_{\text{ref}}$:
-\begin{enumerate}
-  \item $\hat{w} < 50$\,g (model output below minimum plausible portion),
-  \item $\hat{\sigma}_w > \hat{w}$ and $\hat{w} < 280$\,g (high relative
-        uncertainty for a small prediction),
-  \item $\hat{w} < 0.40 \cdot w_{\text{USDA}}$ (predicted weight less than
-        40\% of the USDA typical serving size — indicates depth artefact from
-        overhead photography).
-\end{enumerate}
-$w_{\text{ref}}$ is taken from the USDA serving size when available, or from a
-hand-curated restaurant-portion table (285\,g default).
-
-\subsection{Stage 5 — Food Classification (EfficientNet-B0)}
-\label{sec:effnet}
-
-A \textbf{EfficientNet-B0}~\cite{tan2019efficientnet} backbone pretrained on
-ImageNet is fine-tuned on Food-101 with the following head:
-\[
-  \underbrace{1280}_{\text{pool}} \to
-  \text{DO}(0.3) \to 512 \to \text{BN, ReLU} \to
-  \text{DO}(0.15) \to \underbrace{101}_{\text{classes}}.
-\]
-Training uses AdamW with differential learning rates: backbone $5 \times
-10^{-5}$, head $3 \times 10^{-4}$; cosine annealing; and Mixup regularisation
-with $\alpha{=}0.4$.  When the top-1 confidence exceeds $15\%$, the predicted
-label triggers a USDA FoodData Central lookup to replace global density
-constants.
-
-\subsection{Stage 6 — Macro Derivation and Ensemble}
-\label{sec:macros}
-
-Let $\bar{\mathbf{c}} = (\bar{c}_{\text{cal}}, \bar{c}_{\text{fat}},
-\bar{c}_{\text{pro}}, \bar{c}_{\text{carb}})$ be the active density constants
-(global from Eq.~\ref{eq:constants} or USDA per-food).  The Phase~6 nutrition
-prediction and its uncertainty are:
-\begin{align}
-  \hat{\mathbf{n}}_6 &= \hat{w}\cdot\bar{\mathbf{c}}, \label{eq:p6_mean}\\
-  \hat{\boldsymbol{\sigma}}_6 &= \hat{\sigma}_w\cdot\bar{\mathbf{c}}. \label{eq:p6_std}
-\end{align}
-
-To reduce variance, the final prediction blends Phase~6 with the direct MLP
-regression output $\hat{\mathbf{n}}_4$ from Phase~4 (same 9-feature input,
-4-output MLP):
+For weight-first macros, uncertainty is propagated linearly:
 \begin{equation}
-  \hat{\mathbf{n}} = \alpha \,\hat{\mathbf{n}}_6 + (1-\alpha)\,\hat{\mathbf{n}}_4,
-  \label{eq:ensemble}
+\sigma_{n_j}=\rho_j\sigma_w.
+\label{eq:propagate}
 \end{equation}
-where $\alpha = 0.85$ when USDA lookup returns $\bar{c}_{\text{cal}} \ge
-1.0$\,kcal/g and food confidence $\ge 15\%$; otherwise inverse-variance
-weighting is used:
-\begin{equation}
-  \alpha = \frac{1/\hat{\sigma}_{6}^2}{1/\hat{\sigma}_{6}^2 + 1/\hat{\sigma}_{4}^2}.
-  \label{eq:inv_var}
-\end{equation}
+Equation~\eqref{eq:propagate} is also used in the app confidence display.
 
-\paragraph{Phase 3 baseline.}
-A ResNet-50 backbone with a two-layer regression head is trained end-to-end on
-Nutrition5K images directly (no geometric features), serving as a baseline for
-comparing the geometric pipeline approach.
+\subsection{App Integration and Fallback Logic}
+The runtime mode resolver supports multiple checkpoint combinations:
+\begin{itemize}
+\item \texttt{full}: phase 6 + phase 4 + phase 5 loaded
+\item \texttt{phase6}: weight-first only
+\item \texttt{phase4}: direct regression only
+\item \texttt{phase3}: ResNet fallback
+\end{itemize}
+When food classification confidence is low, the app avoids overconfident labels via a minimum confidence threshold. If USDA dish-specific constants exist, they override generic constants from the local metadata cache and FoodData Central lookup~\cite{usdafdc}.
 
-% ─────────────────────────────────────────────────────────────
+\subsection{Deployment Behavior and Human-in-the-Loop Editing}
+The deployed Gradio interface supports post-inference correction: users can edit ingredient portions (amount/unit), and the backend recomputes totals using USDA per-food densities when available, otherwise fallback dish-level constants. To improve safety and interpretability, the app exposes intermediate quantities (dish label, grams, confidence, per-item calories) and suppresses strong dish assertions when classifier confidence is below threshold.
+
 \section{Experiments and Results}
-\label{sec:experiments}
-% ─────────────────────────────────────────────────────────────
+All stage comparisons use the same fixed split (2597 train / 324 val / 326 test) and matched-split MAE/RMSE reporting to avoid protocol drift.
 
-\subsection{Evaluation Metrics}
+\subsection{Phase 3 to Phase 4 (Matched Split Comparison)}
+The phase-4 notebook reports a direct phase-3 vs phase-4 MAE comparison on the same 326-dish split (Table~\ref{tab:p34}).
 
-We report Mean Absolute Error (MAE), Root Mean Squared Error (RMSE), and Mean
-Absolute Percentage Error (MAPE) for each macro target:
-\begin{equation}
-  \text{MAE}_k = \frac{1}{N}\sum_{i=1}^{N}\bigl|\hat{n}^{(i)}_k - n^{(i)}_k\bigr|,
-  \qquad
-  \text{RMSE}_k = \sqrt{\frac{1}{N}\sum_i \bigl(\hat{n}^{(i)}_k - n^{(i)}_k\bigr)^2}.
-  \label{eq:metrics}
-\end{equation}
-Weight estimation quality is reported separately to isolate geometry errors
-from density-constant errors.
-
-\subsection{Weight Prediction Results}
-
-Table~\ref{tab:weight_results} summarises WeightMLP test performance.  The
-relative weight error of approximately 40--50\% reflects the inherent ambiguity
-of monocular depth: without an absolute scale reference, the network must rely
-entirely on relative depth gradients and mask coverage.
-
-\begin{table}[h]
-  \centering
-  \caption{WeightMLP test set performance on Nutrition5K.}
-  \label{tab:weight_results}
-  \small
-  \begin{tabular}{lrr}
-    \toprule
-    \textbf{Metric} & \textbf{Value} \\
-    \midrule
-    MAE (g)         & \textit{[from run]}  \\
-    RMSE (g)        & \textit{[from run]}  \\
-    Mean dish weight (g) & 280 \\
-    Relative MAE (\%) & \textit{[from run]} \\
-    \bottomrule
-  \end{tabular}
+\begin{table}[t]
+\centering
+\caption{Phase 3 vs Phase 4 MAE on the matched 326-dish test split. Lower values indicate better accuracy; $\Delta$ MAE is computed as (Phase 4 minus Phase 3), so negative values indicate improvement from the geometric phase-4 model.}
+\label{tab:p34}
+\begin{tabular}{lrrr}
+\toprule
+Target & P3 MAE & P4 MAE & $\Delta$ MAE \\
+\midrule
+Calories & 194.25 & 119.79 & -74.46 \\
+Fat      & 12.79  & 7.67   & -5.13 \\
+Protein  & 19.37  & 11.01  & -8.36 \\
+Carb     & 16.01  & 11.14  & -4.87 \\
+\bottomrule
+\end{tabular}
 \end{table}
 
-\subsection{Nutrition Estimation Results}
-
-Table~\ref{tab:nutr_results} compares all four pipeline stages.
-Phase~3 (ResNet-50 direct regression) provides a raw image baseline.
-Phase~4 (NutritionMLP, direct regression from geometric features) shows that
-geometric features already improve over pixel-level regression for fat and
-protein.  Phase~6 (weight-first) achieves the lowest calorie MAE when
-USDA density constants are used.  The ensemble further reduces variance.
-
-\begin{table}[h]
-  \centering
-  \caption{Test-set nutrition MAE on Nutrition5K ($n{=}324$).\\
-           \textit{[Values marked with * to be updated after full run.]}}
-  \label{tab:nutr_results}
-  \setlength{\tabcolsep}{4pt}
-  \scriptsize
-  \begin{tabular}{lrrrr}
-    \toprule
-    \textbf{System} & \textbf{Cal.~(kcal)} & \textbf{Fat~(g)} & \textbf{Pro.~(g)} & \textbf{Carb.~(g)} \\
-    \midrule
-    Phase 3 (ResNet-50)        & $\sim$180*  & $\sim$12* & $\sim$14* & $\sim$20* \\
-    Phase 4 (NutritionMLP)     & 119.8       & 7.7       & 11.0      & \textit{—} \\
-    Phase 6 (WeightMLP+const.) & \textit{[run]}  & \textit{[run]} & \textit{[run]} & \textit{[run]} \\
-    Phase 4+6 Ensemble         & \textit{[run]}  & \textit{[run]} & \textit{[run]} & \textit{[run]} \\
-    \bottomrule
-  \end{tabular}
+\subsection{Phase 4 Direct Nutrition Metrics}
+Table~\ref{tab:p4full} reports the complete phase-4 test-set MAE/RMSE summary obtained with 50 MC-dropout samples per dish.
+\begin{table}[t]
+\centering
+\caption{Phase-4 test metrics with MC Dropout (50 samples). Units are kcal for calories and grams for fat/protein/carbohydrates.}
+\label{tab:p4full}
+\begin{tabular}{lrr}
+\toprule
+Target & MAE & RMSE \\
+\midrule
+Calories & 119.79 & 158.69 \\
+Fat      & 7.67   & 10.66 \\
+Protein  & 11.01  & 15.75 \\
+Carb     & 11.14  & 14.35 \\
+\bottomrule
+\end{tabular}
 \end{table}
 
-\subsection{Food Classification Results}
+\subsection{Phase 6 Weight-First Metrics}
+Phase-6 test output reports:
+\begin{itemize}
+\item Weight MAE/RMSE: 98.9 g / 152.2 g
+\item Mean actual test weight: 192.6 g
+\item Relative error: 51.4\%
+\end{itemize}
+and derived macro MAE values shown in Table~\ref{tab:p6}. The stored checkpoint metadata records a best validation weight MAE of 106.59 g.
 
-EfficientNet-B0 achieves approximately \textbf{83--87\%} top-1 and
-\textbf{96\%} top-5 accuracy on the Food-101 test split
-(Figure~\ref{fig:effnet_placeholder}).  The food label is used to select
-per-food USDA density constants; incorrect classification falls back to global
-Nutrition5K constants automatically.
+\begin{table}[t]
+\centering
+\caption{Phase-6 derived nutrient MAE from the weight-first path. Nutrient values are computed as predicted weight multiplied by learned per-gram constants; calorie MAE is in kcal and macronutrient MAE values are in grams.}
+\label{tab:p6}
+\begin{tabular}{lr}
+\toprule
+Metric & Value \\
+\midrule
+Derived calorie MAE & 133.8 \\
+Derived fat MAE     & 8.1 \\
+Derived protein MAE & 11.9 \\
+Derived carb MAE    & 10.9 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-\begin{figure}[h]
-  \centering
-  % Placeholder — replace with actual confusion matrix or accuracy curve
-  \fbox{\rule{0pt}{2.8cm}\rule{6.5cm}{0pt}}
-  \vspace{2pt}
-  \caption{[Placeholder] EfficientNet-B0 training accuracy curve on Food-101.
-           Replace with actual plot from \texttt{05\_food\_classifier.ipynb}.}
-  \label{fig:effnet_placeholder}
+\subsection{Phase 5 Classification}
+From \texttt{models/best\_food\_classifier.pt}:
+\begin{itemize}
+\item Validation top-1 = 0.8586 (85.86\%)
+\item Validation top-5 = 0.9703 (97.03\%)
+\item Best checkpoint epoch = 23
+\end{itemize}
+Figure~\ref{fig:placeholder_app} marks where author-generated app screenshots should appear in the final PDF.
+
+\begin{figure}[t]
+\centering
+\fbox{%
+\begin{minipage}[c][2.6cm][c]{0.46\columnwidth}
+\centering
+\textbf{Slot A}\\[2pt]
+\scriptsize App overview:\\
+\scriptsize input, label, nutrition table
+\end{minipage}\hfill
+\begin{minipage}[c][2.6cm][c]{0.46\columnwidth}
+\centering
+\textbf{Slot B}\\[2pt]
+\scriptsize Editing view:\\
+\scriptsize portion changes + updated outputs
+\end{minipage}%
+}
+\caption{Qualitative screenshot placeholders for the deployed app. Replace Slot A and Slot B with project screenshots from the Gradio demo.}
+\label{fig:placeholder_app}
 \end{figure}
 
-\subsection{Qualitative Results}
+\subsection{Visual Comparison Across Stages}
+Figure~\ref{fig:maecompare} summarizes calorie MAE across the three available stage outputs. The largest gain is phase 4 over the phase-3 baseline, while phase 6 remains competitive and adds interpretable gram-level outputs.
 
-Figure~\ref{fig:qualitative} shows the Gradio demo output for three food
-images.  Each image produces a calorie estimate, per-macro breakdown, predicted
-weight with $\pm 2\sigma$ uncertainty, and a collapsible panel detailing the
-9-feature vector, MC Dropout statistics, and calorie equation.
-
-\begin{figure}[h]
-  \centering
-  \fbox{\rule{0pt}{3.2cm}\rule{6.5cm}{0pt}}
-  \vspace{2pt}
-  \caption{[Placeholder] Qualitative demo results. Left: spaghetti carbonara.
-           Centre: bibimbap. Right: Caesar salad. Annotate with ground-truth
-           calories and predicted values once demo screenshots are available.}
-  \label{fig:qualitative}
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[x=0.032cm,y=0.21cm]
+\draw[->] (0,0) -- (210,0) node[right,font=\scriptsize] {Calorie MAE};
+\fill[gray!40] (0,24) rectangle (194.25,30);
+\fill[blue!45] (0,14) rectangle (119.79,20);
+\fill[green!50!black!35] (0,4) rectangle (133.8,10);
+\node[left,font=\scriptsize] at (0,27) {Phase 3};
+\node[left,font=\scriptsize] at (0,17) {Phase 4};
+\node[left,font=\scriptsize] at (0,7)  {Phase 6};
+\node[anchor=west,font=\scriptsize] at (196,27) {194.25};
+\node[anchor=west,font=\scriptsize] at (122,17) {119.79};
+\node[anchor=west,font=\scriptsize] at (136,7) {133.8};
+\end{tikzpicture}
+\caption{Calorie MAE comparison across stage outputs in the final system. Phase 4 yields the lowest error, while Phase 6 remains competitive and offers gram-level interpretability via the weight-first path.}
+\label{fig:maecompare}
 \end{figure}
 
-% ─────────────────────────────────────────────────────────────
+\subsection{Analysis}
+The most reliable quantitative gain is phase-4 improvement over phase 3 on the matched split. Phase 6 remains useful for interpretability because users can inspect predicted grams and explicit nutrient conversion.
+
+Largest errors appear in mixed dishes, strong occlusion/viewpoint changes, and foods with similar geometry but different density. In deployment, uncertainty is reported as $\mu\pm\sigma$ and $\mu\pm2\sigma$ to support safer interpretation (Figure~\ref{fig:uncertainty}).
+
+\begin{figure}[!htbp]
+\centering
+\begin{tikzpicture}[x=0.72cm,y=0.45cm]
+\draw[->] (0,0) -- (6,0) node[right,font=\scriptsize] {Predicted weight (g)};
+\draw[thick,blue] (1.6,0) -- (3.6,0);
+\draw[thick,red]  (1.2,0) -- (4.0,0);
+\draw[very thick] (2.6,-0.08) -- (2.6,0.08);
+\node[font=\scriptsize] at (2.6,0.34) {$\mu$};
+\node[blue,font=\scriptsize] at (2.6,0.82) {$\mu\pm\sigma$};
+\node[red,font=\scriptsize] at (2.6,1.16) {$\mu\pm2\sigma$};
+\end{tikzpicture}
+\caption{Uncertainty interval concept used in app reporting.}
+\label{fig:uncertainty}
+\end{figure}
+
 \section{Conclusions}
-\label{sec:conclusions}
-% ─────────────────────────────────────────────────────────────
+This team project produced an end-to-end nutrition estimation system that is practical and extensible. The integrated pipeline combines segmentation, depth, lightweight regressors, uncertainty reporting, and food-prior retrieval in a real-time Gradio demo. Future work will expand dish coverage and improve calibration between classifier confidence and nutrient priors.
 
-We have presented a multi-stage pipeline for food nutrition estimation from a
-single RGB image.  The weight-first formulation (predict dish weight
-geometrically, then multiply by food-class density constants) is more physically
-interpretable and easier to improve than direct end-to-end calorie regression.
-MC Dropout provides lightweight calibrated uncertainty at negligible cost.
-Replacing global Nutrition5K constants with per-food USDA densities reduces
-systematic error on foods whose caloric density deviates from the dataset mean
-(\eg, salads vs.\ fried foods).
+\section{Peer Evaluation}
+All three teammates contributed to the final project pipeline and report; Table~\ref{tab:peer} summarizes responsibility allocation.
 
-\paragraph{Limitations.}
-(1) MiDaS produces relative depth; without absolute scale, the network must
-learn implicit scaling from training data, limiting generalisation to novel
-viewpoints.  (2) Nutrition5K covers only Google cafeteria dishes in controlled
-overhead lighting; domain shift to restaurant or home photos degrades accuracy.
-(3) Food-101 has 101 categories — regional and ethnic foods outside this set
-fall back to global constants.
+\begin{center}
+\begin{minipage}{0.98\columnwidth}
+\centering
+\captionof{table}{Team contribution summary for peer evaluation. Shares reflect primary ownership of implementation, experiments, and writing tasks.}
+\label{tab:peer}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lll}
+\toprule
+Member & Primary responsibilities & Share \\
+\midrule
+Bryan Chau & Integration, app, final report & 34\% \\
+Loc Giang & Data/model experimentation & 33\% \\
+Katelyn Truong & Classification/evaluation support & 33\% \\
+\bottomrule
+\end{tabular}
+\end{minipage}
+\end{center}
 
-\paragraph{Future work.}
-Integrating per-class density lookup as a full soft attention mechanism (the
-food-classifier confidence weights a learned mixture of per-class density
-vectors) could close the gap between the current two-stage approach and an
-ideal end-to-end system.  Scaling the food classifier to iFood-2019 (251
-classes) or Food2K (2000 classes) would substantially improve dietary coverage.
-
-
-% ─────────────────────────────────────────────────────────────
-%  References
-% ─────────────────────────────────────────────────────────────
-\bibliographystyle{plain}
+\clearpage
 \begin{thebibliography}{99}
 
+\bibitem{nutrition5kweb}
+Google Research,
+``Nutrition5K Dataset (GitHub Repository),''
+\url{https://github.com/google-research-datasets/Nutrition5k}, accessed 2026.
+
 \bibitem{bossard2014food101}
-L. Bossard, M. Guillaumin, and L. Van Gool,
+Lukas Bossard, Matthieu Guillaumin, and Luc Van Gool,
 ``Food-101 -- Mining Discriminative Components with Random Forests,''
-\textit{ECCV}, 2014.
-
-\bibitem{ciocca2017nutrinet}
-G. Ciocca, P. Napoletano, and R. Schettini,
-``Nutrition estimation from food photos: An end-to-end deep learning approach,''
-\textit{IEEE Access}, vol. 5, pp. 12560--12572, 2017.
-
-\bibitem{clip2021}
-A. Radford \etal,
-``Learning Transferable Visual Models From Natural Language Supervision (CLIP),''
-\textit{ICML}, 2021.
-
-\bibitem{dehais2017}
-J. Dehais \etal,
-``Two-view 3D reconstruction for food volume estimation,''
-\textit{IEEE Trans. Multimedia}, vol. 19, no. 5, 2017.
-
-\bibitem{dhurandhar2015}
-K. R. Dhurandhar \etal,
-``Accuracy of self-reported caloric intake in obese and normal weight individuals,''
-\textit{PLOS ONE}, vol. 10, no. 2, e0117152, 2015.
-
-\bibitem{dosovitskiy2020vit}
-A. Dosovitskiy \etal,
-``An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale,''
-\textit{ICLR}, 2021.
-
-\bibitem{gal2016mcdropout}
-Y. Gal and Z. Ghahramani,
-``Dropout as a Bayesian Approximation: Representing Model Uncertainty in Deep Learning,''
-\textit{ICML}, 2016.
-
-\bibitem{he2021nutritionfromimage}
-Y. He \etal,
-``An integrated AI system for estimating nutrient content from food images,''
-\textit{Nature Food}, 2021.
-
-\bibitem{ingred360}
-M. Kebaili \etal,
-``INGR-360: ingredient quantity estimation from 360° food photos,''
-\textit{arXiv:2205.00001}, 2022.
-
-\bibitem{lakshminarayanan2017ensembles}
-B. Lakshminarayanan, A. Pritzel, and C. Blundell,
-``Simple and Scalable Predictive Uncertainty Estimation using Deep Ensembles,''
-\textit{NeurIPS}, 2017.
-
-\bibitem{ranftl2020midas}
-R. Ranftl, K. Lasinger, D. Hafner, K. Schindler, and V. Koltun,
-``Towards Robust Monocular Depth Estimation: Mixing Datasets for Zero-Shot Cross-Dataset Transfer,''
-\textit{IEEE TPAMI}, vol. 44, no. 3, 2022.
+ECCV, 2014.
 
 \bibitem{tan2019efficientnet}
-M. Tan and Q. Le,
+Mingxing Tan and Quoc V. Le,
 ``EfficientNet: Rethinking Model Scaling for Convolutional Neural Networks,''
-\textit{ICML}, 2019.
+ICML, 2019.
 
-\bibitem{thames2021nutrition5k}
-Q. Thames \etal,
-``Nutrition5K: Towards Automatic Nutritional Understanding of Generic Food,''
-\textit{CVPR}, 2021.
+\bibitem{midasrepo}
+Rene Ranftl et al.,
+``MiDaS: Monocular Depth Estimation (GitHub Repository),''
+\url{https://github.com/isl-org/MiDaS}, accessed 2026.
 
-\bibitem{usda_fdc}
-United States Department of Agriculture,
-``FoodData Central,''
-\url{https://fdc.nal.usda.gov/}, 2024.
-
-\bibitem{yolov8}
-G. Jocher \etal,
-``Ultralytics YOLOv8,''
+\bibitem{ultralytics2023}
+Ultralytics,
+``YOLOv8 Documentation and Source Code,''
 \url{https://github.com/ultralytics/ultralytics}, 2023.
+
+\bibitem{gal2016dropout}
+Yarin Gal and Zoubin Ghahramani,
+``Dropout as a Bayesian Approximation: Representing Model Uncertainty in Deep Learning,''
+ICML, 2016.
+
+\bibitem{usdafdc}
+USDA,
+``FoodData Central API Guide,''
+\url{https://fdc.nal.usda.gov/api-guide}, accessed 2026.
 
 \end{thebibliography}
 
