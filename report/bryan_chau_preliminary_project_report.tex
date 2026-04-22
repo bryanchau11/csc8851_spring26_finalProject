@@ -97,17 +97,17 @@ Training was compute-intensive, so major jobs were executed on Kaggle GPU instan
 
 \begin{figure}[t]
 \centering
-\begin{minipage}[c]{0.48\columnwidth}
+\begin{minipage}[t]{0.46\columnwidth}
 \centering
-\includegraphics[width=\linewidth]{figures/p6_epoch_loss.png}\\[-1pt]
-\scriptsize (a) Train/validation loss
+\includegraphics[width=0.96\linewidth]{figures/p6_epoch_loss.png}
+\scriptsize Loss
 \end{minipage}\hfill
-\begin{minipage}[c]{0.48\columnwidth}
+\begin{minipage}[t]{0.46\columnwidth}
 \centering
-\includegraphics[width=\linewidth]{figures/p6_epoch_mae.png}\\[-1pt]
-\scriptsize (b) Validation MAE (grams)
+\includegraphics[width=0.96\linewidth]{figures/p6_epoch_mae.png}
+\scriptsize MAE
 \end{minipage}
-\caption{Epoch-level training curves from the Kaggle GPU run used for checkpoint selection in Phase 6. Plot (a) shows train/validation loss convergence and Plot (b) shows validation MAE trend across 60 epochs.}
+\caption{Epoch-level training curves from the GPU training stage. The plots show loss and MAE across training, making the convergence trend and generalization gap visible to readers.}
 \label{fig:epoch_training}
 \end{figure}
 
@@ -288,27 +288,25 @@ From \texttt{models/best\_food\_classifier.pt}:
 \item Validation top-5 = 0.9703 (97.03\%)
 \item Best checkpoint epoch = 23
 \end{itemize}
-Figure~\ref{fig:placeholder_app} marks where author-generated app screenshots should appear in the final PDF.
+Figure~\ref{fig:placeholder_app} shows qualitative screenshots from the deployed app.
 
 \begin{figure}[t]
 \centering
-\fbox{%
-\begin{minipage}[c][2.6cm][c]{0.46\columnwidth}
+\begin{minipage}[t]{0.47\columnwidth}
 \centering
-\textbf{Slot A}\\[2pt]
-\scriptsize App overview:\\
-\scriptsize input, label, nutrition table
+\includegraphics[width=0.98\linewidth]{figures/slot_a_result.png}
+\scriptsize Result panel
 \end{minipage}\hfill
-\begin{minipage}[c][2.6cm][c]{0.46\columnwidth}
+\begin{minipage}[t]{0.47\columnwidth}
 \centering
-\textbf{Slot B}\\[2pt]
-\scriptsize Editing view:\\
-\scriptsize portion changes + updated outputs
-\end{minipage}%
-}
-\caption{Qualitative screenshot placeholders for the deployed app. Replace Slot A and Slot B with project screenshots from the Gradio demo.}
+\includegraphics[width=0.98\linewidth]{figures/ingredient_edit_panel.png}
+\scriptsize Ingredient editing panel
+\end{minipage}
+\caption{Qualitative screenshots from the deployed Gradio app, showing the result panel and ingredient edit interface.}
 \label{fig:placeholder_app}
 \end{figure}
+
+The weight prediction detail panel is summarized in text rather than a screenshot. It explains how the 9D geometric features are formed from YOLO mask area and MiDaS depth statistics, how MC-dropout is used to estimate uncertainty, and how the final gram estimate is converted into calories and macros with dish-specific constants when available.
 
 \subsection{Visual Comparison Across Stages}
 Figure~\ref{fig:maecompare} summarizes calorie MAE across the three available stage outputs. The largest gain is phase 4 over the phase-3 baseline, while phase 6 remains competitive and adds interpretable gram-level outputs.

@@ -7,6 +7,13 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=Source+Serif+4:opsz,wght@8..60,600;8..60,700&display=swap" rel="stylesheet" />
+  <script>
+    window.MathJax = {
+      tex: { inlineMath: [['$', '$'], ['\\(', '\\)']] },
+      chtml: { scale: 0.92 }
+    };
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
   <style>
     :root {
       --ink: #1d2430;
@@ -123,7 +130,7 @@
 
     .main-grid {
       display: grid;
-      grid-template-columns: 1.05fr 1.35fr 1.05fr;
+      grid-template-columns: 0.95fr 1.2fr 1.35fr;
       gap: 0.9rem;
       align-items: start;
     }
@@ -155,6 +162,12 @@
       margin: 0.45rem 0 0.35rem 0;
       font-size: clamp(0.86rem, 1vw, 1.02rem);
       color: #213245;
+    }
+
+    .panel .lead {
+      font-size: clamp(0.84rem, 1vw, 1.02rem);
+      line-height: 1.4;
+      color: #1f2b37;
     }
 
     p {
@@ -281,19 +294,166 @@
       margin-top: 0.38rem;
     }
 
-    .shot {
-      border: 1px dashed #8da0b3;
-      border-radius: 10px;
-      min-height: 3.6rem;
-      background:
-        repeating-linear-gradient(135deg, #f6f8fb, #f6f8fb 8px, #eef3f8 8px, #eef3f8 16px);
+    .figure-grid {
       display: grid;
-      place-items: center;
-      text-align: center;
-      padding: 0.3rem;
+      grid-template-columns: 1fr;
+      gap: 0.55rem;
+      margin-top: 0.4rem;
+    }
+
+    .figure-grid.compact-two {
+      grid-template-columns: 1fr 1fr;
+      gap: 0.5rem;
+    }
+
+    .figure-grid.compact-two .figure-card img {
+      height: 190px;
+    }
+
+    .figure-card {
+      border: 1px solid #cfd7e0;
+      border-radius: 12px;
+      background: #f8fbfe;
+      overflow: hidden;
+    }
+
+    .figure-card.wide {
+      grid-column: 1 / -1;
+    }
+
+    .figure-card img {
+      display: block;
+      width: 100%;
+      height: 330px;
+      object-fit: contain;
+      object-position: center top;
+      background: #0f1724;
+      padding: 0.1rem;
+    }
+
+    .figure-card.tall img {
+      height: 470px;
+    }
+
+    .figure-cap {
+      padding: 0.42rem 0.5rem 0.48rem;
+      border-top: 1px solid #d8e0e8;
       font-size: clamp(0.67rem, 0.82vw, 0.9rem);
-      color: #42596f;
+      line-height: 1.3;
+      color: #35485c;
       font-weight: 700;
+      background: #fff;
+    }
+
+    .weight-visual {
+      background: #f6fbff;
+    }
+
+    .weight-diagram {
+      padding: 0.58rem;
+      background: linear-gradient(180deg, #f8fcff 0%, #eef6ff 100%);
+      display: grid;
+      gap: 0.5rem;
+    }
+
+    .wd-flow {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.32rem;
+    }
+
+    .wd-step {
+      border: 1px solid #c8d6e8;
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 0.3rem;
+      font-size: clamp(0.63rem, 0.77vw, 0.82rem);
+      line-height: 1.24;
+      color: #25374c;
+      min-height: 4.1rem;
+    }
+
+    .wd-step b {
+      color: #0f3b63;
+    }
+
+    .wd-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 0.46rem;
+      align-items: start;
+    }
+
+    .wd-box {
+      border: 1px solid #c8d6e8;
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 0.36rem;
+      min-width: 0;
+    }
+
+    .wd-box h4 {
+      margin: 0 0 0.3rem 0;
+      font-size: clamp(0.66rem, 0.8vw, 0.86rem);
+      color: #113b62;
+      font-family: "Manrope", sans-serif;
+      line-height: 1.2;
+    }
+
+    .feat-row {
+      display: grid;
+      grid-template-columns: minmax(3rem, 3.4rem) minmax(0, 1fr) minmax(1.9rem, 2.1rem);
+      align-items: center;
+      gap: 0.22rem;
+      font-size: clamp(0.61rem, 0.74vw, 0.79rem);
+      color: #2b3f56;
+      margin-bottom: 0.13rem;
+    }
+
+    .feat-row span:first-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .feat-bar {
+      height: 0.44rem;
+      border-radius: 6px;
+      border: 1px solid #c8d3e0;
+      background: #eef3f8;
+      overflow: hidden;
+      min-width: 0;
+    }
+
+    .feat-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #5d8fb8 0%, #4aa8a0 100%);
+    }
+
+    .wd-note {
+      font-size: clamp(0.62rem, 0.75vw, 0.82rem);
+      line-height: 1.25;
+      color: #31485f;
+      margin-top: 0.16rem;
+    }
+
+    .equation-block {
+      margin-top: 0.42rem;
+      padding: 0.6rem 0.7rem;
+      border: 1px solid #d3dbe4;
+      border-radius: 12px;
+      background: linear-gradient(180deg, #fbfdff 0%, #f5f8fc 100%);
+    }
+
+    .equation-block p {
+      margin: 0.18rem 0;
+    }
+
+    .equation-note {
+      margin-top: 0.28rem;
+      color: #51606f;
+      font-size: clamp(0.66rem, 0.8vw, 0.86rem);
+      line-height: 1.3;
     }
 
     .footer {
@@ -370,25 +530,25 @@
 
     @media print {
       @page {
-        size: 48in 36in;
+        size: 24in 36in;
         margin: 0;
       }
 
       html,
       body {
-        width: 48in;
+        width: 24in;
         height: 36in;
         background: #ffffff;
       }
 
       .poster {
-        width: 48in;
+        width: 24in;
         height: 36in;
         margin: 0;
-        padding: 0.65in;
+        padding: 0.42in;
         border: none;
         box-shadow: none;
-        gap: 0.42in;
+        gap: 0.28in;
       }
 
       .panel,
@@ -425,6 +585,7 @@
       <div class="chips">
         <span class="chip accent">Input: single RGB meal image</span>
         <span class="chip accent">Output: calories, fat, protein, carbs</span>
+        <span class="chip">Research question: can geometry beat RGB-only regression?</span>
         <span class="chip">Split: 2597 train / 324 val / 326 test</span>
         <span class="chip warm">Phase 4 calorie MAE: 119.79</span>
         <span class="chip warm">Classifier top-1/top-5: 85.86% / 97.03%</span>
@@ -436,7 +597,7 @@
       <section class="col">
         <div class="panel">
           <h2>Problem and Goal</h2>
-          <p>Visual appearance alone is a weak proxy for mass and nutrition. Similar-looking dishes can have very different density and calorie content. We target practical, single-image estimation with uncertainty-aware output.</p>
+          <p class="lead">Visual appearance alone is a weak proxy for mass and nutrition. Similar-looking dishes can have very different density and calorie content, so the core research question is whether geometry-aware features can improve meal nutrition estimation from one RGB image.</p>
           <h3>Main Contributions</h3>
           <ul>
             <li>Depth-aware 9D geometric descriptor from YOLOv8 segmentation and MiDaS depth.</li>
@@ -463,7 +624,12 @@
 
         <div class="panel">
           <h2>Uncertainty and Deployment</h2>
-          <p>Inference uses MC Dropout with repeated stochastic forward passes. The app reports mean prediction and confidence intervals, and propagates weight uncertainty to nutrient uncertainty in the weight-first path.</p>
+          <p class="lead">Inference uses MC Dropout with repeated stochastic forward passes. The app reports mean prediction and confidence intervals, and propagates weight uncertainty to nutrient uncertainty in the weight-first path.</p>
+          <div class="equation-block">
+            <p>Direct path: $\hat{\mathbf{n}} = f_\theta(g)$</p>
+            <p>Weight-first path: $\hat{w} = h_\phi(g),\; \hat{n}_j = \hat{w}\rho_j$</p>
+            <p>Uncertainty: $\mu = \frac{1}{T}\sum_t \hat{y}^{(t)}$, $\sigma^2 = \frac{1}{T-1}\sum_t(\hat{y}^{(t)}-\mu)^2$</p>
+          </div>
           <div class="kpi-grid">
             <div class="kpi">
               <span class="name">App inference sampling</span>
@@ -551,7 +717,13 @@
               <path class="arr" d="M925 410 L812 448"></path>
             </svg>
           </div>
-          <p class="small">Inference merges direct nutrient prediction, weight-first conversion, and dish-class priors into one editable interface.</p>
+          <p class="small">Inference merges direct nutrient prediction, weight-first conversion, and dish-class priors into one editable interface. The classifier predicts likely dish identity, the geometric encoder estimates portion cues, and the final app merges these signals with USDA constants or fallback priors.</p>
+
+          <div class="equation-block">
+            <p><strong>Prediction target:</strong> $\mathbf{y}=[\text{calories},\text{fat},\text{protein},\text{carb}]$</p>
+            <p><strong>Why geometry helps:</strong> the model uses mask area and depth summaries instead of relying on RGB appearance alone.</p>
+            <p class="equation-note">This is the main design choice that improves portion estimation and explains the Phase 4 gain over the Phase 3 RGB baseline.</p>
+          </div>
 
           <h3>Model Components</h3>
           <table class="mini-table">
@@ -566,6 +738,21 @@
               <tr><td>Classification</td><td>EfficientNet-B0</td><td>Top-k dish probabilities</td></tr>
             </tbody>
           </table>
+        </div>
+
+        <div class="panel">
+          <h2>Training Evidence</h2>
+          <p class="lead">The epoch curves show both train and validation loss/MAE dropping smoothly, supporting the claim that the model converged without obvious instability or divergence.</p>
+          <div class="figure-grid compact-two">
+            <figure class="figure-card">
+              <img src="figures/p6_epoch_loss.png" alt="Epoch loss curve for training and validation" />
+              <figcaption class="figure-cap">Loss vs epoch: stable convergence trend.</figcaption>
+            </figure>
+            <figure class="figure-card">
+              <img src="figures/p6_epoch_mae.png" alt="Epoch MAE curve for training and validation" />
+              <figcaption class="figure-cap">MAE vs epoch: improving prediction quality.</figcaption>
+            </figure>
+          </div>
         </div>
       </section>
 
@@ -604,15 +791,45 @@
           <h2>Classification and Demo</h2>
           <p><strong>Phase 5 EfficientNet-B0:</strong> top-1 85.86%, top-5 97.03%, best epoch 23.</p>
           <p><strong>Phase 6 derived MAE:</strong> calories 133.8, fat 8.1, protein 11.9, carb 10.9.</p>
-          <p class="small"><strong>App screenshots to insert:</strong> use representative screens from upload to edited results.</p>
+          <p class="small"><strong>What the demo shows:</strong> upload an image, get the predicted dish and nutrient table, inspect the editable ingredient panel, and read the weight prediction details that explain the geometry-driven estimate.</p>
 
-          <div class="placeholder-grid">
-            <div class="shot">Slot A<br />Landing / image upload</div>
-            <div class="shot">Slot B<br />Dish classification + top-k</div>
-            <div class="shot">Slot C<br />Mask/depth visualization</div>
-            <div class="shot">Slot D<br />Initial nutrition output table</div>
-            <div class="shot">Slot E<br />Ingredient portion editing</div>
-            <div class="shot">Slot F<br />Updated totals + confidence</div>
+          <div class="figure-grid">
+            <figure class="figure-card tall">
+              <img src="figures/slot_a_result.png" alt="Nutrition result panel showing detected dish and nutrient table" />
+              <figcaption class="figure-cap">Result panel: predicted dish, calories, macros, and confidence-aware output.</figcaption>
+            </figure>
+            <figure class="figure-card tall">
+              <img src="figures/ingredient_edit_panel.png" alt="Ingredient edit panel with editable portions" />
+              <figcaption class="figure-cap">Editable portion controls: users can correct ingredient amounts and rerun totals.</figcaption>
+            </figure>
+            <figure class="figure-card wide weight-visual">
+              <div class="weight-diagram" aria-label="Weight-first prediction explanation diagram">
+                <div class="wd-flow">
+                  <div class="wd-step"><b>Step 1</b><br />Extract 9D geometric features from YOLO mask + MiDaS depth.</div>
+                  <div class="wd-step"><b>Step 2</b><br />Predict weight with WeightMLP and sample MC-Dropout passes.</div>
+                  <div class="wd-step"><b>Step 3</b><br />Estimate uncertainty from sample mean $\mu$ and variance $\sigma^2$.</div>
+                  <div class="wd-step"><b>Step 4</b><br />Convert grams to calories/macros with dish-specific constants $\rho_j$.</div>
+                </div>
+                <div class="wd-grid">
+                  <div class="wd-box">
+                    <h4>Example geometric features (normalized)</h4>
+                    <div class="feat-row"><span>mask_area </span><div class="feat-bar"><div class="feat-fill" style="width: 69.6%;"></div></div><span>0.695</span></div>
+                    <div class="feat-row"><span>d_mean</span><div class="feat-bar"><div class="feat-fill" style="width: 45.7%;"></div></div><span>0.457</span></div>
+                    <div class="feat-row"><span>d_std</span><div class="feat-bar"><div class="feat-fill" style="width: 27.6%;"></div></div><span>0.276</span></div>
+                    <div class="feat-row"><span>nd_mean</span><div class="feat-bar"><div class="feat-fill" style="width: 52.7%;"></div></div><span>0.527</span></div>
+                    <div class="feat-row"><span>nd_std</span><div class="feat-bar"><div class="feat-fill" style="width: 27.0%;"></div></div><span>0.270</span></div>
+                  </div>
+                  <div class="wd-box">
+                    <h4>Weight-first output</h4>
+                    <p class="wd-note">Predicted weight: <b>47 g</b><br />Selected serving anchor: <b>350 g</b></p>
+                    <p class="wd-note">MC interval: $\mu \pm 2\sigma$</p>
+                    <p class="wd-note">Nutrition conversion:<br />$\hat{n}_j = \hat{w}\rho_j$</p>
+                    <p class="wd-note">Final report combines dish prior + conversion constants + confidence interval.</p>
+                  </div>
+                </div>
+              </div>
+              <figcaption class="figure-cap">Weight-first method visual: feature extraction, stochastic weight prediction, uncertainty estimation, and nutrient conversion.</figcaption>
+            </figure>
           </div>
 
           <h3>Error Patterns</h3>
@@ -622,6 +839,7 @@
             <li>Foods with similar geometry but different density.</li>
           </ul>
         </div>
+
       </section>
     </main>
 
@@ -650,7 +868,7 @@
       <div>
         <h4>Presentation Notes</h4>
         <div class="qr-slot">Place QR code here<br />for live demo or repo</div>
-        <p class="small">Print tip: In browser print settings, choose landscape, enable background graphics, and use 100% scale.</p>
+        <p class="small">Print tip: choose custom paper size 24in × 36in (portrait), set scale to 100%, and enable background graphics.</p>
       </div>
     </footer>
   </article>
