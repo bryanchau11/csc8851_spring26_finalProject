@@ -157,6 +157,21 @@
       color: #213245;
     }
 
+    .method-subhead {
+      display: inline-block;
+      margin-top: 0.55rem;
+      padding-bottom: 0.08rem;
+      border-bottom: 2px solid var(--accent);
+      color: #0f4158;
+      font-weight: 800;
+      letter-spacing: 0.01em;
+    }
+
+    .method-subhead::before {
+      color: var(--accent-2);
+      font-weight: 800;
+    }
+
     p {
       margin: 0.38rem 0;
       color: #232d3a;
@@ -279,6 +294,37 @@
       grid-template-columns: repeat(3, 1fr);
       gap: 0.5rem;
       margin-top: 0.38rem;
+    }
+
+    .demo-fig-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.5rem;
+      margin: 0.45rem 0 0.35rem;
+    }
+
+    .demo-fig {
+      margin: 0;
+      border: 1px solid #c8d2dc;
+      border-radius: 10px;
+      background: #f8fbfe;
+      padding: 0.28rem;
+    }
+
+    .demo-fig img {
+      width: 100%;
+      height: auto;
+      display: block;
+      border-radius: 7px;
+      border: 1px solid #d8e1ea;
+    }
+
+    .demo-fig figcaption {
+      margin-top: 0.22rem;
+      font-size: clamp(0.66rem, 0.8vw, 0.88rem);
+      color: #33475b;
+      font-weight: 700;
+      text-align: center;
     }
 
     .shot {
@@ -422,14 +468,6 @@
           <div>nchau1@student.gsu.edu · lgiang2@student.gsu.edu · ltruong18@student.gsu.edu</div>
         </div>
       </div>
-      <div class="chips">
-        <span class="chip accent">Input: single RGB meal image</span>
-        <span class="chip accent">Output: calories, fat, protein, carbs</span>
-        <span class="chip">Split: 2597 train / 324 val / 326 test</span>
-        <span class="chip warm">Phase 4 calorie MAE: 119.79</span>
-        <span class="chip warm">Classifier top-1/top-5: 85.86% / 97.03%</span>
-        <span class="chip">Deployment: Gradio with editable portions + confidence</span>
-      </div>
     </header>
 
     <main class="main-grid">
@@ -460,9 +498,33 @@
             <li>Phase 6: Weight-first MLP then macro conversion.</li>
           </ul>
         </div>
+      </section>
 
+      <section class="col">
         <div class="panel">
-          <h2>Uncertainty and Deployment</h2>
+          <h2>Method</h2>
+          <h3 class="method-subhead">Model Details</h3>
+          <h3>Complementary Nutrient Paths (Phases 4 &amp; 6)</h3>
+          <p>From the 9D geometric feature vector <em>g</em>, two nutrient estimation paths are computed:</p>
+          <div style="background:var(--accent-soft);border-left:3px solid var(--accent);border-radius:6px;padding:0.6rem 0.9rem;margin:0.5rem 0;font-family:'Source Serif 4',serif;">
+            <div style="margin-bottom:0.35rem;">
+              <strong>(2)</strong>&nbsp;&nbsp;<em>n&#x0302;</em> = <em>f</em><sub>&theta;</sub>(<em>g</em>)
+            </div>
+            <div>
+              <strong>(3)</strong>&nbsp;&nbsp;<em>w&#x0302;</em> = <em>h</em><sub>&phi;</sub>(<em>g</em>),&nbsp;&nbsp;<em>n&#x0302;</em><sub>j</sub> = <em>w&#x0302;</em>&thinsp;&rho;<sub>j</sub>
+            </div>
+          </div>
+          <p style="margin-top:0.4rem;">Eq.&nbsp;(2) is the <strong>direct nutrient regression</strong> path (Phase&nbsp;4). Eq.&nbsp;(3) is the <strong>weight-first conversion</strong> path (Phase&nbsp;6), where per-gram constants &rho;<sub>j</sub> convert predicted weight to macronutrients.</p>
+
+          <h3>MLP Architecture (Phases 4 &amp; 6)</h3>
+          <ul>
+            <li><strong>Input:</strong> 9 geometric features</li>
+            <li><strong>Hidden layers:</strong> 128 &rarr; 64 &rarr; 32</li>
+            <li><strong>Regularization:</strong> BatchNorm + ReLU + Dropout (0.2)</li>
+            <li><strong>Output:</strong> 4 nutrients — calories, fat, protein, carb (Phase&nbsp;4) <em>or</em> 1 scalar weight in grams (Phase&nbsp;6)</li>
+          </ul>
+
+          <h3 class="method-subhead">Uncertainty and Deployment</h3>
           <p>Inference uses MC Dropout with repeated stochastic forward passes. The app reports mean prediction and confidence intervals, and propagates weight uncertainty to nutrient uncertainty in the weight-first path.</p>
           <div class="kpi-grid">
             <div class="kpi">
@@ -482,12 +544,8 @@
               <span class="value">low-confidence labels suppressed</span>
             </div>
           </div>
-        </div>
-      </section>
 
-      <section class="col">
-        <div class="panel">
-          <h2>Integrated Pipeline</h2>
+          <h3 class="method-subhead">Integrated Pipeline</h3>
           <div class="pipeline-wrap">
             <svg viewBox="0 0 1000 560" role="img" aria-label="Pipeline diagram">
               <defs>
@@ -525,9 +583,11 @@
 
               <rect class="node" x="700" y="216" width="150" height="78"></rect>
               <text class="txt" x="775" y="256" text-anchor="middle">Phase 4</text>
+              <text class="txt" x="775" y="280" text-anchor="middle">NutritionMLP</text>
 
               <rect class="node" x="860" y="216" width="130" height="78"></rect>
               <text class="txt" x="925" y="256" text-anchor="middle">Phase 6</text>
+              <text class="txt" x="925" y="280" text-anchor="middle">WeightMLP</text>
 
               <rect class="node" x="860" y="332" width="130" height="78"></rect>
               <text class="txt" x="925" y="364" text-anchor="middle">USDA /</text>
@@ -553,7 +613,7 @@
           </div>
           <p class="small">Inference merges direct nutrient prediction, weight-first conversion, and dish-class priors into one editable interface.</p>
 
-          <h3>Model Components</h3>
+          <h3 class="method-subhead">Model Components</h3>
           <table class="mini-table">
             <thead>
               <tr><th>Stage</th><th>Model</th><th>Output</th></tr>
@@ -561,9 +621,10 @@
             <tbody>
               <tr><td>Segmentation</td><td>YOLOv8n-seg</td><td>Food mask(s)</td></tr>
               <tr><td>Depth</td><td>MiDaS small</td><td>Relative depth map</td></tr>
-              <tr><td>Direct path</td><td>NutritionMLP</td><td>Calories, fat, protein, carb</td></tr>
-              <tr><td>Weight-first</td><td>WeightMLP</td><td>Weight then nutrient conversion</td></tr>
-              <tr><td>Classification</td><td>EfficientNet-B0</td><td>Top-k dish probabilities</td></tr>
+              <tr><td>Direct path</td><td>P4 NutritionMLP</td><td>Calories, fat, protein, carb</td></tr>
+              <tr><td>Weight-first</td><td>P6 WeightMLP</td><td>Weight then nutrient conversion</td></tr>
+              <tr><td>Classification</td><td>P5 EfficientNet-B0</td><td>Top-k dish probabilities</td></tr>
+              <tr><td>External prior</td><td>USDA cache/API</td><td>Food-specific density</td></tr>
             </tbody>
           </table>
         </div>
@@ -604,17 +665,18 @@
           <h2>Classification and Demo</h2>
           <p><strong>Phase 5 EfficientNet-B0:</strong> top-1 85.86%, top-5 97.03%, best epoch 23.</p>
           <p><strong>Phase 6 derived MAE:</strong> calories 133.8, fat 8.1, protein 11.9, carb 10.9.</p>
-          <p class="small"><strong>App screenshots to insert:</strong> use representative screens from upload to edited results.</p>
 
-          <div class="placeholder-grid">
-            <div class="shot">Slot A<br />Landing / image upload</div>
-            <div class="shot">Slot B<br />Dish classification + top-k</div>
-            <div class="shot">Slot C<br />Mask/depth visualization</div>
-            <div class="shot">Slot D<br />Initial nutrition output table</div>
-            <div class="shot">Slot E<br />Ingredient portion editing</div>
-            <div class="shot">Slot F<br />Updated totals + confidence</div>
+          <div class="demo-fig-grid">
+            <figure class="demo-fig">
+              <img src="figures/slot_a_result.png" alt="Result panel screenshot" />
+              <figcaption>Result panel</figcaption>
+            </figure>
+            <figure class="demo-fig">
+              <img src="figures/ingredient_edit_panel.png" alt="Ingredient editing panel screenshot" />
+              <figcaption>Ingredient editing panel</figcaption>
+            </figure>
           </div>
-
+          
           <h3>Error Patterns</h3>
           <ul>
             <li>Mixed dishes with overlapping components.</li>
@@ -629,7 +691,7 @@
       <div>
         <h4>Conclusion</h4>
         <p>The final integrated system balances predictive accuracy and interpretability by combining segmentation, depth cues, direct nutrient regression, weight-first reasoning, and uncertainty-aware reporting in a practical Gradio workflow.</p>
-        <div class="repo">
+        <div class="c">
           Project repository:<br />
           <a href="https://github.com/bryanchau11/csc8851_spring26_finalProject">github.com/bryanchau11/csc8851_spring26_finalProject</a>
         </div>
@@ -645,12 +707,6 @@
           <li>Gal and Ghahramani, Dropout uncertainty, ICML 2016.</li>
           <li>USDA FoodData Central API Guide.</li>
         </ol>
-      </div>
-
-      <div>
-        <h4>Presentation Notes</h4>
-        <div class="qr-slot">Place QR code here<br />for live demo or repo</div>
-        <p class="small">Print tip: In browser print settings, choose landscape, enable background graphics, and use 100% scale.</p>
       </div>
     </footer>
   </article>
