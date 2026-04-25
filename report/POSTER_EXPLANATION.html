@@ -1,0 +1,1505 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Food Nutrition Estimation - Detailed Explanation</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=Source+Serif+4:opsz,wght@8..60,600;8..60,700&display=swap" rel="stylesheet" />
+  <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <style>
+    :root {
+      --ink: #1d2430;
+      --muted: #4f5a69;
+      --paper: #f8f7f4;
+      --panel: #ffffff;
+      --line: #d4d7dc;
+      --accent: #0f766e;
+      --accent-soft: #d7efec;
+      --accent-2: #8a5a44;
+      --accent-2-soft: #f2e2d9;
+      --accent-3: #3f5f94;
+      --shadow: 0 12px 30px rgba(0, 0, 0, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: "Manrope", "Avenir Next", "Trebuchet MS", sans-serif;
+      line-height: 1.6;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+
+    h1 {
+      font-family: "Source Serif 4", serif;
+      font-size: 2.5rem;
+      margin-bottom: 0.5rem;
+      color: var(--accent);
+      border-bottom: 3px solid var(--accent);
+      padding-bottom: 1rem;
+    }
+
+    h2 {
+      font-family: "Source Serif 4", serif;
+      font-size: 1.8rem;
+      margin-top: 2rem;
+      margin-bottom: 0.8rem;
+      color: #0e2c3f;
+      border-left: 4px solid var(--accent);
+      padding-left: 0.8rem;
+    }
+
+    h3 {
+      font-size: 1.3rem;
+      margin-top: 1.5rem;
+      margin-bottom: 0.6rem;
+      color: #1a3a4a;
+      font-weight: 700;
+    }
+
+    .section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      box-shadow: var(--shadow);
+    }
+
+    p {
+      margin: 0.8rem 0;
+      color: #232d3a;
+      font-size: 1rem;
+      line-height: 1.6;
+    }
+
+    .keyword {
+      background: var(--accent-soft);
+      border-left: 3px solid var(--accent);
+      padding: 1rem;
+      margin: 1rem 0;
+      border-radius: 6px;
+    }
+
+    .keyword strong {
+      color: var(--accent);
+      font-weight: 800;
+    }
+
+    .equation-box {
+      background: #fcfdff;
+      border: 1px solid #c9d7e0;
+      border-radius: 10px;
+      padding: 1rem;
+      margin: 1rem 0;
+      overflow-x: auto;
+      font-size: 1.1rem;
+      line-height: 1.8;
+    }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1rem;
+      margin: 1rem 0;
+    }
+
+    .feature-card {
+      background: linear-gradient(135deg, #f5f7fa 0%, #eef3f8 100%);
+      border: 1px solid #c9d4dc;
+      border-radius: 10px;
+      padding: 1rem;
+      border-left: 4px solid var(--accent);
+    }
+
+    .feature-card h4 {
+      margin: 0 0 0.5rem 0;
+      color: #0f4f49;
+      font-weight: 800;
+      font-size: 1rem;
+    }
+
+    .feature-card p {
+      margin: 0.4rem 0;
+      font-size: 0.95rem;
+      color: #2a3441;
+    }
+
+    .metric-box {
+      background: #f3f8fb;
+      border-left: 4px solid var(--accent-3);
+      padding: 1rem;
+      margin: 1rem 0;
+      border-radius: 6px;
+    }
+
+    .metric-box strong {
+      color: var(--accent-3);
+      font-weight: 800;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1rem 0;
+      background: #ffffff;
+      border: 1px solid #c9d7e0;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    th, td {
+      border: 1px solid #d4dde4;
+      padding: 0.8rem;
+      text-align: left;
+    }
+
+    th {
+      background: #f0f5fa;
+      color: #0f3347;
+      font-weight: 800;
+    }
+
+    tr:nth-child(even) {
+      background: #f8fbfd;
+    }
+
+    .list-detailed {
+      list-style: none;
+      padding: 0;
+    }
+
+    .list-detailed li {
+      background: #ffffff;
+      border-left: 4px solid var(--accent);
+      padding: 0.8rem 1rem;
+      margin-bottom: 0.6rem;
+      border-radius: 6px;
+    }
+
+    .list-detailed strong {
+      color: var(--accent);
+      font-weight: 800;
+    }
+
+    .comparison {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin: 1rem 0;
+    }
+
+    .comparison-item {
+      background: #f5f7fa;
+      border: 1px solid #c9d7e0;
+      border-radius: 10px;
+      padding: 1rem;
+    }
+
+    .comparison-item h4 {
+      margin: 0 0 0.5rem 0;
+      color: #0e2c3f;
+      font-weight: 800;
+    }
+
+    code {
+      background: #f0f5fa;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+      font-family: "Monaco", "Courier New", monospace;
+      font-size: 0.9rem;
+      color: #0f4f49;
+    }
+
+    .highlight {
+      background: #fff3cd;
+      padding: 0.2rem 0.4rem;
+      border-radius: 3px;
+      font-weight: 600;
+    }
+
+    .toc {
+      background: #f0f7f5;
+      border: 1px solid #c9d7d0;
+      border-radius: 10px;
+      padding: 1.5rem;
+      margin-bottom: 2rem;
+    }
+
+    .toc h3 {
+      margin-top: 0;
+      color: var(--accent);
+    }
+
+    .toc ol {
+      margin: 0.5rem 0;
+      padding-left: 1.5rem;
+    }
+
+    .toc li {
+      margin-bottom: 0.4rem;
+    }
+
+    .toc a {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    .toc a:hover {
+      text-decoration: underline;
+    }
+
+    .diagram {
+      background: #fcfdff;
+      border: 1px solid #c9d7e0;
+      border-radius: 10px;
+      padding: 1rem;
+      margin: 1rem 0;
+      text-align: center;
+      font-family: monospace;
+      overflow-x: auto;
+      color: #0f4f49;
+      line-height: 1.8;
+    }
+
+    @media (max-width: 768px) {
+      .container {
+        padding: 1rem;
+      }
+
+      h1 {
+        font-size: 1.8rem;
+      }
+
+      h2 {
+        font-size: 1.4rem;
+      }
+
+      .comparison {
+        grid-template-columns: 1fr;
+      }
+
+      .feature-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🔬 Food Nutrition Estimation from RGB Image: Complete Technical Guide</h1>
+    <p style="font-size: 1.1rem; color: var(--muted); margin-bottom: 2rem;">
+      A comprehensive explanation of the methodology, metrics, features, equations, and results for your conference presentation.
+    </p>
+
+    <div class="toc">
+      <h3>📋 Table of Contents</h3>
+      <ol>
+        <li><a href="#problem">Problem Statement & Motivation</a></li>
+        <li><a href="#metrics">Evaluation Metrics (MAE, RMSE, MAPE)</a></li>
+        <li><a href="#features">The 9 Geometric Features (Detailed Breakdown)</a></li>
+        <li><a href="#equations">Mathematical Equations & Paths</a></li>
+        <li><a href="#architecture">Model Architecture</a></li>
+        <li><a href="#phases">Development Phases 3-6</a></li>
+        <li><a href="#uncertainty">Uncertainty Quantification (MC Dropout)</a></li>
+        <li><a href="#results">Results & Interpretation</a></li>
+        <li><a href="#errors">Error Patterns & Limitations</a></li>
+        <li><a href="#deployment">Deployment & User Interface</a></li>
+      </ol>
+    </div>
+
+    <!-- ===== SECTION 1 ===== -->
+    <div class="section" id="problem">
+      <h2>1. Problem Statement & Motivation</h2>
+      
+      <h3>The Core Challenge</h3>
+      <p>
+        Nutritionists and fitness enthusiasts need accurate calorie and macronutrient estimates for food. 
+        Traditionally, this requires:
+      </p>
+      <ul class="list-detailed">
+        <li><strong>Food weighing:</strong> Precise kitchen scales (cumbersome for daily meals)</li>
+        <li><strong>Manual lookup:</strong> USDA database searches (time-consuming)</li>
+        <li><strong>Eyeballing portions:</strong> Error-prone (±50% uncertainty typical)</li>
+      </ul>
+
+      <p>
+        <strong>Your Innovation:</strong> Estimate nutrition from a <span class="highlight">single RGB photograph</span> using 
+        computer vision + machine learning, with <span class="highlight">quantified uncertainty</span>.
+      </p>
+
+      <h3>Why Visual Appearance Alone Isn't Enough</h3>
+      <div class="keyword">
+        <strong>Example:</strong> A bowl of pasta looks identical whether it weighs 200g (dry weight) or 500g (cooked weight). 
+        The cooked version has ~150% more calories. Visual features alone cannot distinguish between them.
+      </div>
+
+      <p>
+        <strong>Your Solution:</strong> Combine three information sources:
+      </p>
+      <ul class="list-detailed">
+        <li><strong>RGB texture:</strong> Learn food type patterns (e.g., tomato sauce is red)</li>
+        <li><strong>Segmentation mask:</strong> Determine the boundary of the food item</li>
+        <li><strong>Depth map:</strong> Estimate 3D structure, volume, and mass</li>
+      </ul>
+    </div>
+
+    <!-- ===== SECTION 2 ===== -->
+    <div class="section" id="metrics">
+      <h2>2. Evaluation Metrics: MAE, RMSE, MAPE</h2>
+
+      <h3>Why Multiple Metrics?</h3>
+      <p>
+        Different metrics capture different failure modes. You use three:
+      </p>
+
+      <div class="metric-box">
+        <strong>MAE (Mean Absolute Error)</strong><br/>
+        <div class="equation-box">
+          $$\text{MAE} = \frac{1}{N} \sum_{i=1}^{N} \left| y_i - \hat{y}_i \right|$$
+        </div>
+        <p>
+          <strong>What it means:</strong> Average prediction error in the same units as the target (kcal, grams, etc.)
+        </p>
+        <p>
+          <strong>Example:</strong> MAE = 119.79 kcal means on average your prediction is off by ±120 calories.
+        </p>
+        <p>
+          <strong>Why use it:</strong> Intuitive, robust to outliers (doesn't penalize extreme errors as harshly).
+        </p>
+        <p>
+          <strong>When it matters:</strong> For user-facing apps, MAE feels fair—big errors count the same as small ones.
+        </p>
+      </div>
+
+      <div class="metric-box">
+        <strong>RMSE (Root Mean Squared Error)</strong><br/>
+        <div class="equation-box">
+          $$\text{RMSE} = \sqrt{\frac{1}{N} \sum_{i=1}^{N} \left( y_i - \hat{y}_i \right)^2}$$
+        </div>
+        <p>
+          <strong>What it means:</strong> Penalizes large errors more heavily than small ones.
+        </p>
+        <p>
+          <strong>Example:</strong> RMSE = 158.69 kcal vs MAE = 119.79 kcal. 
+          The gap (39 kcal) indicates you have some larger prediction errors.
+        </p>
+        <p>
+          <strong>Why use it:</strong> Encourages the model to avoid extreme failures.
+        </p>
+        <p>
+          <strong>When it matters:</strong> Safety-critical applications. RMSE > MAE signals high variance.
+        </p>
+      </div>
+
+      <div class="metric-box">
+        <strong>MAPE (Mean Absolute Percentage Error)</strong><br/>
+        <div class="equation-box">
+          $$\text{MAPE} = \frac{100\%}{N} \sum_{i=1}^{N} \left| \frac{y_i - \hat{y}_i}{y_i} \right|$$
+        </div>
+        <p>
+          <strong>What it means:</strong> Relative error (percentage). Independent of scale.
+        </p>
+        <p>
+          <strong>Example:</strong> Predicting 100 kcal when actual is 200 kcal = 50% error.
+        </p>
+        <p>
+          <strong>Why you use it secondarily:</strong> Can be unstable when true values are small (division by near-zero).
+        </p>
+      </div>
+
+      <h3>Your Metric Hierarchy (Stated on Poster)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Rank</th>
+            <th>Metric</th>
+            <th>Reason</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Primary</strong></td>
+            <td>MAE & RMSE</td>
+            <td>Stable, actionable in real units (kcal, grams)</td>
+          </tr>
+          <tr>
+            <td><strong>Secondary</strong></td>
+            <td>MAPE</td>
+            <td>Provides relative perspective; less reliable for small values</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Interpretation of Your Results</h3>
+      <div class="comparison">
+        <div class="comparison-item">
+          <h4>Phase 4 (Direct Nutrient)</h4>
+          <p><strong>Calories MAE:</strong> 119.79 kcal</p>
+          <p>For a 500 kcal meal, ±119 kcal = ±24% error.</p>
+          <p><strong>Status:</strong> Good for casual tracking, not medical-grade.</p>
+        </div>
+        <div class="comparison-item">
+          <h4>Phase 6 (Weight-First)</h4>
+          <p><strong>Weight MAE:</strong> 98.9 g</p>
+          <p>For a 200g portion, ±99g = ±49% error.</p>
+          <p><strong>Status:</strong> Weight prediction is noisy; nutrient conversion adds error.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== SECTION 3 ===== -->
+    <div class="section" id="features">
+      <h2>3. The 9 Geometric Features (Detailed Breakdown)</h2>
+
+      <p>
+        <strong>Definition:</strong> A 9-dimensional vector <code>g = [f₁, f₂, ..., f₉]</code> extracted from the food mask 
+        and depth map. These replace raw pixels as input to the nutrition MLP.
+      </p>
+
+      <h3>Why Geometry Instead of Pixels?</h3>
+      <ul class="list-detailed">
+        <li><strong>Scale invariance:</strong> A 100g meatball and a 500g meatball look similar in RGB; geometry captures the difference.</li>
+        <li><strong>Physical grounding:</strong> Calories correlate with mass/volume, not appearance.</li>
+        <li><strong>Dimensionality reduction:</strong> From 1.2M pixels → 9 numbers; easier to learn from limited data.</li>
+      </ul>
+
+      <h3>The 9 Features (Exact Definitions)</h3>
+      <div class="feature-grid">
+        <div class="feature-card">
+          <h4>1. Mask Area (pixels)</h4>
+          <p><strong>Computation:</strong> Sum of all pixels in the segmentation mask.</p>
+          <p><strong>Formula:</strong> <code>area = count(mask > 0.5)</code></p>
+          <p><strong>Interpretation:</strong> Larger food footprint in image → likely more food mass.</p>
+          <p><strong>Range:</strong> 1,000 – 500,000 pixels (depends on camera distance).</p>
+        </div>
+
+        <div class="feature-card">
+          <h4>2. Mask Perimeter (pixels)</h4>
+          <p><strong>Computation:</strong> Boundary length of the food contour.</p>
+          <p><strong>Method:</strong> Trace the edge of the mask, sum edge lengths.</p>
+          <p><strong>Interpretation:</strong> Complex, convoluted foods (e.g., pasta) have high perimeter.</p>
+          <p><strong>Signal:</strong> Shape complexity can hint at density variations.</p>
+        </div>
+
+        <div class="feature-card">
+          <h4>3. Convex Hull Area (pixels)</h4>
+          <p><strong>Computation:</strong> Area of the smallest convex shape enclosing the mask.</p>
+          <p><strong>Method:</strong> Convex hull algorithm (Graham scan).</p>
+          <p><strong>Interpretation:</strong> Ratio of (mask area / convex hull area) = shape solidity.</p>
+          <p><strong>Example:</strong> Soup (solid) → ratio ≈ 1; Spaghetti (complex) → ratio ≈ 0.4.</p>
+        </div>
+
+        <div class="feature-card">
+          <h4>4. Mean Depth (raw units)</h4>
+          <p><strong>Computation:</strong> Average depth value within the mask.</p>
+          <p><strong>Formula:</strong> <code>mean_depth = mean(depth[mask > 0.5])</code></p>
+          <p><strong>Interpretation:</strong> Higher mean depth = thicker/taller food item.</p>
+          <p><strong>Why it matters:</strong> Two items with same area but different heights have different volumes.</p>
+        </div>
+
+        <div class="feature-card">
+          <h4>5. Std Dev Depth (raw units)</h4>
+          <p><strong>Computation:</strong> Standard deviation of depth within the mask.</p>
+          <p><strong>Formula:</strong> <code>std_depth = std(depth[mask > 0.5])</code></p>
+          <p><strong>Interpretation:</strong> High std dev = uneven food (e.g., chunky stew, layered cake).</p>
+          <p><strong>Signal:</strong> Captures structural heterogeneity → can hint at ingredient mixing.</p>
+        </div>
+
+        <div class="feature-card">
+          <h4>6. Min Depth (raw units)</h4>
+          <p><strong>Computation:</strong> Smallest depth value in the mask (closest point to camera).</p>
+          <p><strong>Interpretation:</strong> Peaks/protrusions toward camera.</p>
+          <p><strong>Example:</strong> A sandwich has low min_depth (bread peak); soup has high min_depth (flat surface).</p>
+        </div>
+
+        <div class="feature-card">
+          <h4>7. Max Depth (raw units)</h4>
+          <p><strong>Computation:</strong> Largest depth value in the mask (farthest point from camera).</p>
+          <p><strong>Interpretation:</strong> Overall food thickness/height.</p>
+          <p><strong>Range:</strong> Larger range (max - min) = taller, more 3D food.</p>
+        </div>
+
+        <div class="feature-card">
+          <h4>8. Depth Range (raw units)</h4>
+          <p><strong>Computation:</strong> <code>depth_range = max_depth - min_depth</code></p>
+          <p><strong>Interpretation:</strong> Total vertical extent of the food.</p>
+          <p><strong>Signal:</strong> Range ≈ 0 = flat food (plate of cookies); Range >> 0 = tall food (glass of juice).</p>
+        </div>
+
+        <div class="feature-card">
+          <h4>9. Solidity Index (unitless)</h4>
+          <p><strong>Computation:</strong> <code>solidity = mask_area / convex_hull_area</code></p>
+          <p><strong>Range:</strong> 0 to 1. (1 = perfect circle/square; 0.5 = highly concave).</p>
+          <p><strong>Interpretation:</strong> Compact foods (fruit) → solidity near 1. Complex foods (pasta, salad) → low solidity.</p>
+          <p><strong>Biological signal:</strong> Compact → dense; complex → airy or mixed.</p>
+        </div>
+      </div>
+
+      <h3>How 9D Features Replace Raw Pixels</h3>
+      <div class="diagram">
+Input RGB image (1280×720×3 = 2.76M values)<br/>
+              ↓<br/>
+YOLOv8-seg predicts food mask (binary 1280×720 = 921.6K values)<br/>
+              ↓<br/>
+MiDaS predicts depth map (1280×720 = 921.6K values)<br/>
+              ↓<br/>
+Compute 9 geometric statistics from mask &amp; depth<br/>
+              ↓<br/>
+<strong>9D feature vector g = [area, perimeter, conv_hull, mean_d, std_d, min_d, max_d, range_d, solidity]</strong><br/>
+              ↓<br/>
+Feed to MLP for nutrition prediction
+      </div>
+
+      <h3>Advantages of This Approach</h3>
+      <ul class="list-detailed">
+        <li><strong>Explainability:</strong> You can inspect each feature; understand why prediction high/low.</li>
+        <li><strong>Robustness to lighting:</strong> Geometry doesn't care if food is in shadow or bright sunlight.</li>
+        <li><strong>Data efficiency:</strong> 9 features from 2.76M pixel values; trains with fewer samples.</li>
+        <li><strong>Transfer learning:</strong> YOLOv8 & MiDaS are pre-trained on millions of images.</li>
+      </ul>
+    </div>
+
+    <!-- ===== SECTION 4 ===== -->
+    <div class="section" id="equations">
+      <h2>4. Mathematical Equations & Prediction Paths</h2>
+
+      <h3>The Two Nutrient Estimation Paths</h3>
+      <p>
+        Your system computes nutrition via two independent methods. Both take the 9D geometry vector as input.
+      </p>
+
+      <h3>Path A: Direct Nutrient Regression (Phase 4)</h3>
+      <div class="equation-box">
+        $$\hat{\mathbf{n}} = f_\theta(\mathbf{g})$$
+        <br/><br/>
+        where:<br/>
+        <strong>g</strong> = 9D geometric feature vector<br/>
+        <strong>f</strong> = MLP neural network (128 → 64 → 32 layers)<br/>
+        <strong>θ</strong> = learned weights and biases<br/>
+        <strong>n̂</strong> = predicted nutrient vector = [ĉ, f̂, p̂, ĉₐᵣb] (4 macronutrients)
+      </div>
+
+      <h3>Detailed Explanation: Direct Path</h3>
+      <p>
+        <strong>Input:</strong> 9 numbers (geometry)
+      </p>
+      <p>
+        <strong>Layer 1 (Input → 128):</strong> 
+        <code>h₁ = ReLU(BatchNorm(W₁g + b₁))</code><br/>
+        Maps 9D geometry to 128 hidden units. ReLU adds non-linearity (enables learning complex shapes).
+      </p>
+      <p>
+        <strong>Layer 2 (128 → 64):</strong> 
+        <code>h₂ = ReLU(BatchNorm(W₂h₁ + b₂)) with Dropout(0.2)</code><br/>
+        Compresses to 64 units. Dropout randomly zeros 20% of activations during training → prevents overfitting.
+      </p>
+      <p>
+        <strong>Layer 3 (64 → 32):</strong> 
+        <code>h₃ = ReLU(BatchNorm(W₃h₂ + b₃)) with Dropout(0.2)</code><br/>
+        Further compression to 32 units.
+      </p>
+      <p>
+        <strong>Output Layer (32 → 4):</strong> 
+        <code>n̂ = Linear(h₃) = [W₄h₃ + b₄]</code><br/>
+        4 nutrient predictions (no activation, unbounded regression).
+      </p>
+
+      <p><strong>Training loss:</strong></p>
+      <div class="equation-box">
+        $$\mathcal{L} = \text{MAE}(\hat{\mathbf{n}}, \mathbf{n}) = \frac{1}{4} \sum_{j=1}^{4} |\hat{n}_j - n_j|$$
+      </div>
+
+      <p>
+        Mean error across all 4 nutrients. Model learns to minimize prediction error on training data.
+      </p>
+
+      <hr style="margin: 2rem 0; border: none; border-top: 1px solid var(--line);">
+
+      <h3>Path B: Weight-First Conversion (Phase 6)</h3>
+      <div class="equation-box">
+        $$\hat{w} = h_\phi(\mathbf{g})$$
+        $$\hat{n}_j = \hat{w} \cdot \rho_j \quad \text{for } j \in \{\text{cal, fat, prot, carb}\}$$
+      </div>
+
+      <h3>Detailed Explanation: Weight-First Path</h3>
+      <p>
+        <strong>Step 1: Predict Weight</strong> (using same 9D geometry)<br/>
+        <code>ŵ = h_φ(g)</code> where h_φ is another MLP (structure: 128 → 64 → 32 → 1)<br/>
+        Output: Single scalar = predicted weight in grams
+      </p>
+
+      <p>
+        <strong>Example:</strong> If actual food is pasta, model predicts ŵ = 180g.
+      </p>
+
+      <p>
+        <strong>Step 2: Convert Weight to Nutrients Using Constants</strong><br/>
+        Once you have weight, multiply by per-gram constants (ρⱼ):
+      </p>
+      <div class="equation-box">
+        $$\hat{c} = \hat{w} \times \rho_{\text{cal}} \quad \text{(calories per gram)}$$
+        $$\hat{f} = \hat{w} \times \rho_{\text{fat}} \quad \text{(fat per gram)}$$
+        $$\hat{p} = \hat{w} \times \rho_{\text{prot}} \quad \text{(protein per gram)}$$
+        $$\hat{c}_{arb} = \hat{w} \times \rho_{\text{carb}} \quad \text{(carbs per gram)}$$
+      </div>
+
+      <p>
+        <strong>Example (Pasta):</strong>
+      </p>
+      <ul class="list-detailed">
+        <li>Predicted weight: 180g</li>
+        <li>Pasta nutritional constant: 1.3 cal/g (dry basis)</li>
+        <li>Predicted calories: 180g × 1.3 = 234 kcal</li>
+      </ul>
+
+      <p>
+        <strong>Where do ρ values come from?</strong>
+      </p>
+      <ul class="list-detailed">
+        <li>First, classify food type (Phase 5: EfficientNet → Top-5 dishes)</li>
+        <li>Query USDA database for average macros of that dish type</li>
+        <li>If available in cache: use precomputed constants</li>
+        <li>If not cached: query USDA API (slow, ~1s per food type)</li>
+      </ul>
+
+      <h3>Why Two Paths?</h3>
+      <div class="comparison">
+        <div class="comparison-item">
+          <h4>Path A: Direct (Phase 4)</h4>
+          <p><strong>Pros:</strong> Fast end-to-end, learns implicit relationships.</p>
+          <p><strong>Cons:</strong> "Black box"—hard to debug why prediction high/low.</p>
+        </div>
+        <div class="comparison-item">
+          <h4>Path B: Weight-First (Phase 6)</h4>
+          <p><strong>Pros:</strong> Interpretable (humans understand weight → calories). Uses external priors.</p>
+          <p><strong>Cons:</strong> Two stages of error; errors accumulate.</p>
+        </div>
+      </div>
+
+      <p>
+        <strong>Your strategy:</strong> Compute both, report both, let user choose (or ensemble them).
+      </p>
+    </div>
+
+    <!-- ===== SECTION 5 ===== -->
+    <div class="section" id="architecture">
+      <h2>5. Model Architecture (Detailed)</h2>
+
+      <h3>System Overview</h3>
+      <div class="diagram">
+Input image (1280×720)<br/>
+    ↓<br/>
+[YOLOv8n-seg] → Food mask (binary)<br/>
+    ↓<br/>
+[MiDaS Small] → Depth map<br/>
+    ↓<br/>
+[Geometry Extractor] → 9D feature vector g<br/>
+    ↓<br/>
+[Phase 4 MLP] → Nutrition (4 outputs)<br/>
+[Phase 5 EfficientNet-B0] → Food class (Food-101 top-5)<br/>
+[Phase 6 MLP] → Weight (1 output)<br/>
+    ↓<br/>
+[USDA Lookup] (if using Phase 6)<br/>
+    ↓<br/>
+[Gradio UI] → Display with confidence intervals
+      </div>
+
+      <h3>Component 1: YOLOv8n-seg (Segmentation)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Property</th>
+            <th>Value</th>
+            <th>Meaning</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Model</strong></td>
+            <td>YOLOv8n-seg</td>
+            <td>"n" = nano (smallest, fastest variant)</td>
+          </tr>
+          <tr>
+            <td><strong>Task</strong></td>
+            <td>Instance segmentation</td>
+            <td>Predicts pixel-level mask of food vs. background</td>
+          </tr>
+          <tr>
+            <td><strong>Input size</strong></td>
+            <td>1280×720 (or 640×640)</td>
+            <td>You provide RGB image</td>
+          </tr>
+          <tr>
+            <td><strong>Output</strong></td>
+            <td>Binary mask (0 = background, 1 = food)</td>
+            <td>Or soft mask (0–1 probabilities)</td>
+          </tr>
+          <tr>
+            <td><strong>Speed</strong></td>
+            <td>~30 FPS on GPU</td>
+            <td>Real-time capable</td>
+          </tr>
+          <tr>
+            <td><strong>Pre-trained on</strong></td>
+            <td>COCO 80 classes</td>
+            <td>Generic object segmentation; fine-tuned on your food data</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p><strong>Why YOLOv8n?</strong> Balance speed vs. accuracy. Larger variants (medium, large) are more accurate but slow.</p>
+
+      <h3>Component 2: MiDaS (Depth Estimation)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Property</th>
+            <th>Value</th>
+            <th>Meaning</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Model</strong></td>
+            <td>MiDaS Small</td>
+            <td>Monocular Depth Estimation; "Small" = lightweight</td>
+          </tr>
+          <tr>
+            <td><strong>Input</strong></td>
+            <td>RGB image</td>
+            <td>Same RGB as segmentation input</td>
+          </tr>
+          <tr>
+            <td><strong>Output</strong></td>
+            <td>Relative depth map (1280×720)</td>
+            <td>Pixel-wise depth (not absolute cm; relative ordering only)</td>
+          </tr>
+          <tr>
+            <td><strong>Pre-trained on</strong></td>
+            <td>NYU Depth v2, KITTI, etc.</td>
+            <td>Indoor and outdoor scenes; generalizes to food</td>
+          </tr>
+          <tr>
+            <td><strong>Speed</strong></td>
+            <td>~50 FPS on GPU</td>
+            <td>Faster than segmentation</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p><strong>Why depth?</strong> RGB alone doesn't tell you volume. Two identical-looking bowls of soup can have very different depths (and thus volumes and calories).</p>
+
+      <h3>Component 3: Geometry Extractor (Your Custom Code)</h3>
+      <p>
+        Takes mask + depth → outputs 9D feature vector. This is <strong>differentiable</strong> (all operations are, so gradients can flow back).
+      </p>
+
+      <h3>Component 4: Phase 4 MLP (Direct Nutrition)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Layer</th>
+            <th>Input Dim</th>
+            <th>Output Dim</th>
+            <th>Activation</th>
+            <th>Regularization</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1 (Input)</td>
+            <td>9</td>
+            <td>128</td>
+            <td>ReLU</td>
+            <td>BatchNorm</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td>128</td>
+            <td>64</td>
+            <td>ReLU</td>
+            <td>BatchNorm + Dropout(0.2)</td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td>64</td>
+            <td>32</td>
+            <td>ReLU</td>
+            <td>BatchNorm + Dropout(0.2)</td>
+          </tr>
+          <tr>
+            <td>4 (Output)</td>
+            <td>32</td>
+            <td>4</td>
+            <td>None (Linear)</td>
+            <td>None</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p><strong>Total parameters:</strong> ~15K (tiny model, fits any device).</p>
+
+      <h3>Component 5: Phase 6 MLP (Weight Prediction)</h3>
+      <p>Same architecture as Phase 4, but output layer outputs 1 value (weight) instead of 4 (nutrients).</p>
+
+      <h3>Component 6: Phase 5 EfficientNet-B0 (Food Classification)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Property</th>
+            <th>Value</th>
+            <th>Meaning</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Model</strong></td>
+            <td>EfficientNet-B0</td>
+            <td>Lightweight CNN; "B0" = smallest scale</td>
+          </tr>
+          <tr>
+            <td><strong>Dataset</strong></td>
+            <td>Food-101 (101 food categories)</td>
+            <td>Identifies what type of food (pizza, salad, sushi, etc.)</td>
+          </tr>
+          <tr>
+            <td><strong>Output</strong></td>
+            <td>Top-5 class probabilities</td>
+            <td>E.g., [sushi: 85%, salmon: 10%, rice: 3%, ...]</td>
+          </tr>
+          <tr>
+            <td><strong>Parameters</strong></td>
+            <td>~5.3M</td>
+            <td>Larger than MLPs but still efficient</td>
+          </tr>
+          <tr>
+            <td><strong>Used for</strong></td>
+            <td>USDA lookup prior</td>
+            <td>If Phase 6 weight prediction, use food class to look up nutritional constants</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Component 7: USDA Cache/API</h3>
+      <p>
+        Stores precomputed nutritional constants for common foods. Examples:
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>Food</th>
+            <th>ρ_cal (kcal/g)</th>
+            <th>ρ_fat (g/g)</th>
+            <th>ρ_prot (g/g)</th>
+            <th>ρ_carb (g/g)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Pasta (dry)</td>
+            <td>3.7</td>
+            <td>0.013</td>
+            <td>0.125</td>
+            <td>0.75</td>
+          </tr>
+          <tr>
+            <td>Chicken breast (cooked)</td>
+            <td>1.65</td>
+            <td>0.036</td>
+            <td>0.314</td>
+            <td>0</td>
+          </tr>
+          <tr>
+            <td>Olive oil</td>
+            <td>8.84</td>
+            <td>1.0</td>
+            <td>0</td>
+            <td>0</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p><strong>Your system caches these</strong> so Phase 6 doesn't need to query USDA API every time (slow).</p>
+    </div>
+
+    <!-- ===== SECTION 6 ===== -->
+    <div class="section" id="phases">
+      <h2>6. Development Phases 3–6 (Iterative Refinement)</h2>
+
+      <h3>Why Phases?</h3>
+      <p>
+        You built incrementally. Each phase added complexity, tested new ideas, measured improvement.
+      </p>
+
+      <h3>Phase 3: ResNet-50 Baseline</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Aspect</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Input</strong></td>
+            <td>Raw RGB image (1280×720)</td>
+          </tr>
+          <tr>
+            <td><strong>Model</strong></td>
+            <td>ResNet-50 pretrained on ImageNet, fine-tuned output layer for 4 nutrients</td>
+          </tr>
+          <tr>
+            <td><strong>Output</strong></td>
+            <td>Direct nutrient predictions from pixels</td>
+          </tr>
+          <tr>
+            <td><strong>MAE (calories)</strong></td>
+            <td><strong>194.25 kcal</strong> ← Baseline error</td>
+          </tr>
+          <tr>
+            <td><strong>Insight</strong></td>
+            <td>Pixels alone don't encode volume/mass well. Similar-looking foods vary widely.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Phase 4: Geometry-Based MLP (Direct Nutrition)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Aspect</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Input</strong></td>
+            <td>9D geometric feature vector (from YOLOv8 + MiDaS)</td>
+          </tr>
+          <tr>
+            <td><strong>Model</strong></td>
+            <td>MLP (128 → 64 → 32 → 4)</td>
+          </tr>
+          <tr>
+            <td><strong>Output</strong></td>
+            <td>Direct nutrient predictions</td>
+          </tr>
+          <tr>
+            <td><strong>MAE (calories)</strong></td>
+            <td><strong>119.79 kcal</strong> ← 38.3% improvement! 🎯</td>
+          </tr>
+          <tr>
+            <td><strong>RMSE (calories)</strong></td>
+            <td>158.69 kcal</td>
+          </tr>
+          <tr>
+            <td><strong>Key insight</strong></td>
+            <td>Geometry (area, depth, shape) is far more predictive than raw pixels for nutrition.</td>
+          </tr>
+          <tr>
+            <td><strong>Per-nutrient MAE</strong></td>
+            <td>Fat: 7.67g, Protein: 11.01g, Carb: 11.14g</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Phase 5: Food Classification (EfficientNet-B0)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Aspect</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Input</strong></td>
+            <td>RGB image</td>
+          </tr>
+          <tr>
+            <td><strong>Model</strong></td>
+            <td>EfficientNet-B0 trained on Food-101</td>
+          </tr>
+          <tr>
+            <td><strong>Output</strong></td>
+            <td>Top-5 predicted food classes with probabilities</td>
+          </tr>
+          <tr>
+            <td><strong>Accuracy (test)</strong></td>
+            <td>Top-1: 85.86%, Top-5: 97.03%</td>
+          </tr>
+          <tr>
+            <td><strong>Purpose in pipeline</strong></td>
+            <td>Provides <strong>prior</strong> for USDA lookup (Phase 6). Helps user understand what model thinks the food is.</td>
+          </tr>
+          <tr>
+            <td><strong>Example output</strong></td>
+            <td>"95% sushi, 4% salmon nigiri, 1% rice bowl"</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Phase 6: Weight-First MLP (Indirect Nutrition)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Aspect</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Input</strong></td>
+            <td>9D geometric feature vector (same as Phase 4)</td>
+          </tr>
+          <tr>
+            <td><strong>Step 1</strong></td>
+            <td>MLP predicts weight in grams (128 → 64 → 32 → 1)</td>
+          </tr>
+          <tr>
+            <td><strong>Step 2</strong></td>
+            <td>Look up food class (Phase 5), query USDA constants ρⱼ</td>
+          </tr>
+          <tr>
+            <td><strong>Step 3</strong></td>
+            <td>Convert: nutrient = weight × ρⱼ</td>
+          </tr>
+          <tr>
+            <td><strong>Weight MAE (test)</strong></td>
+            <td>98.9 grams</td>
+          </tr>
+          <tr>
+            <td><strong>Derived nutrient MAE (calories)</strong></td>
+            <td>133.8 kcal (slightly worse than Phase 4 direct)</td>
+          </tr>
+          <tr>
+            <td><strong>Why test it?</strong></td>
+            <td>Weight prediction is more <strong>interpretable</strong. Humans can debug: "weight prediction was off by 50g" is clearer than "calories off by 100 kcal due to ???".</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Performance Summary Across Phases</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Phase</th>
+            <th>Approach</th>
+            <th>Cal. MAE (kcal)</th>
+            <th>Cal. RMSE (kcal)</th>
+            <th>Improvement vs Phase 3</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>3</strong></td>
+            <td>ResNet-50 (pixels)</td>
+            <td>194.25</td>
+            <td>—</td>
+            <td>Baseline</td>
+          </tr>
+          <tr>
+            <td><strong>4</strong></td>
+            <td>Geometry MLP (direct)</td>
+            <td><strong>119.79</strong></td>
+            <td>158.69</td>
+            <td><strong>-38.3%</strong> 🎯</td>
+          </tr>
+          <tr>
+            <td><strong>5</strong></td>
+            <td>EfficientNet (classification only)</td>
+            <td>—</td>
+            <td>—</td>
+            <td>Prior for Phase 6</td>
+          </tr>
+          <tr>
+            <td><strong>6</strong></td>
+            <td>Weight MLP + USDA conversion</td>
+            <td>133.8</td>
+            <td>—</td>
+            <td>-31.1% (competitive)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        <strong>Conclusion:</strong> Phase 4 geometry-based direct prediction is <strong>best</strong>. 
+        Phase 6 is competitive and more interpretable, so you report both.
+      </p>
+    </div>
+
+    <!-- ===== SECTION 7 ===== -->
+    <div class="section" id="uncertainty">
+      <h2>7. Uncertainty Quantification (MC Dropout)</h2>
+
+      <h3>Why Report Uncertainty?</h3>
+      <p>
+        Don't just give a point estimate ("200 kcal"). Users need to know confidence ("200 ± 50 kcal" = 68% confident in range).
+      </p>
+
+      <h3>MC Dropout Explained</h3>
+      <p>
+        <strong>Core idea:</strong> During inference, keep dropout enabled (normally it's only during training). 
+        Run the model T times with different random dropout patterns, then aggregate results.
+      </p>
+
+      <div class="equation-box">
+        For each forward pass <em>t</em> ∈ {1, ..., T}:<br/>
+        $$\hat{y}^{(t)} = f_\theta(\mathbf{g}, \text{dropout enabled})$$
+        <br/><br/>
+        Compute empirical mean and variance:<br/>
+        $$\mu = \frac{1}{T} \sum_{t=1}^{T} \hat{y}^{(t)}$$
+        $$\sigma^2 = \frac{1}{T} \sum_{t=1}^{T} (\hat{y}^{(t)} - \mu)^2$$
+      </div>
+
+      <h3>Your Settings</h3>
+      <div class="keyword">
+        <strong>App inference:</strong> T = 30 samples (balance speed vs. accuracy)<br/>
+        <strong>Notebook evaluation:</strong> T = 50 samples (more thorough analysis)<br/>
+        <strong>Reported intervals:</strong> μ ± σ (68% confidence) and μ ± 2σ (95% confidence)
+      </div>
+
+      <h3>Example Output</h3>
+      <p>
+        User uploads photo of pasta. Your system outputs:
+      </p>
+      <div class="diagram">
+Predicted Calories: 250 kcal<br/>
+68% Confidence: 220–280 kcal (μ ± σ)<br/>
+95% Confidence: 190–310 kcal (μ ± 2σ)<br/>
+Model uncertainty (std): 30 kcal
+      </div>
+
+      <p>
+        <strong>Interpretation for user:</strong> "Most likely 250 kcal, but could be anywhere from 190–310 kcal. That pasta is noisy to predict."
+      </p>
+
+      <h3>Why MC Dropout Works</h3>
+      <p>
+        Different dropout masks → network takes slightly different paths → outputs vary → variation ≈ model uncertainty.
+      </p>
+
+      <p>
+        If all T samples give similar output, uncertainty is low (model confident). 
+        If samples vary widely, uncertainty is high (model unsure).
+      </p>
+
+      <h3>Low-Confidence Suppression</h3>
+      <p>
+        <strong>Safety feature:</strong> If σ is very large (high uncertainty), you can optionally suppress the prediction 
+        and flag it for manual review instead.
+      </p>
+
+      <div class="keyword">
+        <strong>Example:</strong> "Unable to confidently predict (high uncertainty). Please verify or edit manually."
+      </div>
+    </div>
+
+    <!-- ===== SECTION 8 ===== -->
+    <div class="section" id="results">
+      <h2>8. Results & Interpretation</h2>
+
+      <h3>Test Set Performance (Phase 4 Direct)</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Nutrient</th>
+            <th>MAE</th>
+            <th>RMSE</th>
+            <th>Typical meal size</th>
+            <th>% Error</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Calories</strong></td>
+            <td>119.79 kcal</td>
+            <td>158.69 kcal</td>
+            <td>~500 kcal meal</td>
+            <td>±24%</td>
+          </tr>
+          <tr>
+            <td><strong>Fat</strong></td>
+            <td>7.67 g</td>
+            <td>10.66 g</td>
+            <td>~30g in meal</td>
+            <td>±26%</td>
+          </tr>
+          <tr>
+            <td><strong>Protein</strong></td>
+            <td>11.01 g</td>
+            <td>15.75 g</td>
+            <td>~35g in meal</td>
+            <td>±31%</td>
+          </tr>
+          <tr>
+            <td><strong>Carbs</strong></td>
+            <td>11.14 g</td>
+            <td>14.35 g</td>
+            <td>~60g in meal</td>
+            <td>±19%</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Interpretation</h3>
+      <ul class="list-detailed">
+        <li><strong>Best performance:</strong> Carbs (±19%), then Calories (±24%). Likely because both correlate with volume/density.</li>
+        <li><strong>Worst performance:</strong> Protein (±31%). Why? Protein varies wildly by food (tofu vs. chicken vs. legumes look similar but have different protein). Geometry can't distinguish.</li>
+        <li><strong>Use case:</strong> Good for casual tracking (±20% error is acceptable). Not medical-grade nutrition therapy.</li>
+      </ul>
+
+      <h3>Why Phase 4 > Phase 6?</h3>
+      <p>
+        Phase 4 direct: 119.79 kcal MAE
+      </p>
+      <p>
+        Phase 6 weight-first: 133.8 kcal MAE (12% worse)
+      </p>
+
+      <p>
+        <strong>Reason:</strong> Phase 6 has two error sources:
+      </p>
+      <ol class="list-detailed" style="list-style: decimal;">
+        <li><strong>Weight prediction error:</strong> ±99g (as reported)</li>
+        <li><strong>USDA constant error:</strong> Constants are averages; real food may have different density</li>
+      </ol>
+
+      <p>
+        Phase 4 skips the weight step, allowing the MLP to learn implicit nonlinear relationships (e.g., 
+        "this specific geometry pattern means higher carb density than average").
+      </p>
+
+      <h3>Phase 5 Classification Performance</h3>
+      <p>
+        EfficientNet-B0 on Food-101:
+      </p>
+      <ul class="list-detailed">
+        <li><strong>Top-1 accuracy:</strong> 85.86% (correct prediction 85% of time)</li>
+        <li><strong>Top-5 accuracy:</strong> 97.03% (correct answer in top 5 predictions 97% of time)</li>
+        <li><strong>Best epoch:</strong> 23 (then starts overfitting)</li>
+      </ul>
+
+      <p>
+        <strong>What this means:</strong> Food classification is pretty reliable. Users trust the "what is this?" answer 97% of the time. 
+        Helps with USDA lookup (Phase 6) and debugging.
+      </p>
+    </div>
+
+    <!-- ===== SECTION 9 ===== -->
+    <div class="section" id="errors">
+      <h2>9. Error Patterns & Limitations</h2>
+
+      <h3>When Does the System Fail?</h3>
+
+      <h3>Error Pattern 1: Mixed Dishes with Overlapping Components</h3>
+      <p>
+        <strong>Example:</strong> Salad with various vegetables, dressing, cheese.
+      </p>
+      <p>
+        <strong>Problem:</strong> YOLOv8-seg treats entire salad as one mask. Geometry features average over all components. 
+        Model doesn't know how much of the mask is lettuce (low cal) vs. croutons (high cal).
+      </p>
+      <p>
+        <strong>Failure mode:</strong> Predicts average nutrition; could be off by ±50% for individual components.
+      </p>
+
+      <h3>Error Pattern 2: Strong Occlusion or Unusual Viewpoints</h3>
+      <p>
+        <strong>Example:</strong> Food partially hidden behind a fork, or shot from extreme angle.
+      </p>
+      <p>
+        <strong>Problem:</strong> YOLOv8 mask becomes incomplete. Depth map breaks down (can't see through occluder). 
+        Geometry features extrapolate wrongly.
+      </p>
+      <p>
+        <strong>Failure mode:</strong> Underestimates food mass; predicts too few calories.
+      </p>
+
+      <h3>Error Pattern 3: Similar Geometry, Different Density</h3>
+      <p>
+        <strong>Example:</strong> A bowl of popcorn vs. a bowl of rice (both white, similar volume).
+      </p>
+      <p>
+        <strong>Problem:</strong> Geometry alone can't distinguish air pockets from dense grain. 
+        Popcorn is ~90% air (low cal/g), rice is ~10% air (high cal/g).
+      </p>
+      <p>
+        <strong>Failure mode:</strong> Predicts same calories for both; major error for popcorn (50% underestimate) 
+        and rice (50% overestimate).
+      </p>
+
+      <h3>Error Pattern 4: Extreme Aspect Ratios</h3>
+      <p>
+        <strong>Example:</strong> Thin crepe vs. thick cake (same footprint, different height).
+      </p>
+      <p>
+        <strong>Problem:</strong> Depth range (max - min) captures thickness, but model may struggle to learn the nonlinear 
+        relationship (thick ≠ always means more calories if it's airy).
+      </p>
+      <p>
+        <strong>Failure mode:</strong> Occasional mispredictions for extreme aspect ratios.
+      </p>
+
+      <h3>Mitigation Strategies</h3>
+      <ul class="list-detailed">
+        <li><strong>Uncertainty reporting:</strong> Flag high-uncertainty predictions for manual review.</li>
+        <li><strong>User edits:</strong> Gradio UI allows users to correct predictions ("I said it's 250g but model predicted 180g").</li>
+        <li><strong>Food classification:</strong> Phase 5 helps user verify ("Is this what you meant by pizza?").</li>
+        <li><strong>Ensemble methods:</strong> Report both Phase 4 and Phase 6; let user choose or average.</li>
+      </ul>
+    </div>
+
+    <!-- ===== SECTION 10 ===== -->
+    <div class="section" id="deployment">
+      <h2>10. Deployment & User Interface</h2>
+
+      <h3>Gradio UI Workflow</h3>
+      <div class="diagram">
+User uploads photo<br/>
+              ↓<br/>
+[YOLOv8 + MiDaS] Segment &amp; depth extraction (~1-2 sec)<br/>
+              ↓<br/>
+[Phase 5] Classify food (~0.5 sec)<br/>
+              ↓<br/>
+[Phase 4] Direct nutrient prediction with MC Dropout (~1 sec)<br/>
+[Phase 6] Weight prediction + USDA lookup (~1 sec)<br/>
+              ↓<br/>
+[Display Results]<br/>
+- Result table (nutrients + confidence intervals)<br/>
+- Classification top-5<br/>
+- Food image with segmentation mask overlay<br/>
+              ↓<br/>
+User can edit nutrients &amp; resubmit
+      </div>
+
+      <h3>Output Example</h3>
+      <p><strong>Input:</strong> Photo of grilled chicken with roasted vegetables.</p>
+
+      <p><strong>Output displayed to user:</strong></p>
+      <table>
+        <thead>
+          <tr>
+            <th>Nutrient</th>
+            <th>Predicted</th>
+            <th>68% CI</th>
+            <th>95% CI</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Calories</td>
+            <td>380 kcal</td>
+            <td>350–410</td>
+            <td>320–440</td>
+          </tr>
+          <tr>
+            <td>Fat</td>
+            <td>12g</td>
+            <td>10–14g</td>
+            <td>8–16g</td>
+          </tr>
+          <tr>
+            <td>Protein</td>
+            <td>52g</td>
+            <td>46–58g</td>
+            <td>40–64g</td>
+          </tr>
+          <tr>
+            <td>Carbs</td>
+            <td>15g</td>
+            <td>13–17g</td>
+            <td>11–19g</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        <strong>Food classification:</strong> 92% chicken, 6% vegetables, 2% other
+      </p>
+
+      <p>
+        <strong>Segmentation visualization:</strong> [Image with green mask overlay showing detected chicken &amp; veggies]
+      </p>
+
+      <h3>User Editing Panel</h3>
+      <p>
+        <strong>If user disagrees:</strong> "Actually, I added extra sauce. It's ~450 kcal, not 380."
+      </p>
+      <p>
+        Gradio allows them to edit each nutrient → stored in database → can fine-tune model later.
+      </p>
+
+      <h3>Benefits of This Workflow</h3>
+      <ul class="list-detailed">
+        <li><strong>Human-in-the-loop:</strong> Model + human judgment = better outcomes.</li>
+        <li><strong>Transparency:</strong> User sees confidence intervals → understands model uncertainty.</li>
+        <li><strong>Data collection:</strong> User edits become training data for future model improvements.</li>
+        <li><strong>Safety:</strong> Low-confidence predictions flagged (don't let model make risky guesses).</li>
+      </ul>
+
+      <h3>Performance Targets</h3>
+      <ul class="list-detailed">
+        <li><strong>Speed:</strong> &lt;3 sec end-to-end (YOLOv8 + depth + MLP inference)</li>
+        <li><strong>Accuracy:</strong> ±120 kcal MAE (24% relative error on 500 kcal meal)</li>
+        <li><strong>Availability:</strong> Can run on GPU or CPU (slow on CPU but possible)</li>
+      </ul>
+    </div>
+
+    <!-- ===== CONCLUSION ===== -->
+    <div class="section">
+      <h2>Summary: Key Takeaways for Your Presentation</h2>
+
+      <h3>🎯 Core Innovation</h3>
+      <p>
+        Replace raw pixels with <strong>9 geometric features</strong> (area, perimeter, depth statistics, solidity). 
+        This 39% error reduction proves geometry matters more than appearance.
+      </p>
+
+      <h3>📊 Key Results</h3>
+      <ul class="list-detailed">
+        <li><strong>Phase 4 MAE:</strong> 119.79 kcal (vs. 194.25 ResNet baseline)</li>
+        <li><strong>Phase 5 accuracy:</strong> 85.86% top-1 food classification</li>
+        <li><strong>Phase 6 weight MAE:</strong> 98.9 grams</li>
+      </ul>
+
+      <h3>🔧 Technical Highlights</h3>
+      <ul class="list-detailed">
+        <li>YOLOv8n segmentation + MiDaS depth → 9D features → MLP nutrition</li>
+        <li>MC Dropout for uncertainty quantification (T=30 app, T=50 notebook)</li>
+        <li>Two prediction paths: direct (Phase 4) and weight-first (Phase 6)</li>
+        <li>Phase 5 food classification (EfficientNet-B0, 97% top-5)</li>
+      </ul>
+
+      <h3>⚠️ Limitations</h3>
+      <ul class="list-detailed">
+        <li>Mixed dishes (hard to segment individual components)</li>
+        <li>Occlusion (can't see behind objects)</li>
+        <li>Similar geometry, different density (e.g., popcorn vs. rice)</li>
+        <li>±24% relative error (not medical-grade)</li>
+      </ul>
+
+      <h3>🚀 Real-World Impact</h3>
+      <p>
+        Practical meal tracking app: take photo → instant nutrition + editable output. 
+        Useful for fitness, diet tracking, meal planning. Uncertainty intervals help users make informed decisions.
+      </p>
+    </div>
+
+  </div>
+</body>
+</html>
