@@ -1,251 +1,229 @@
-# CSC8851 Spring 2026 — Final Project: Food Nutrition Estimator 🍕
+# CSC8851 Spring 2026 Final Project - Food Nutrition Estimator 🍱
 
-> **Team**: Bryan Chau, Katelyn Truong, Loc Giang  
-> **Course**: CSC8851 — Deep Learning  
-> **Semester**: Spring 2026
+![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.x-EE4C2C?logo=pytorch&logoColor=white)
+![Gradio](https://img.shields.io/badge/Gradio-3.50.2-FF7A59)
+![YOLOv8](https://img.shields.io/badge/YOLOv8-seg-111111)
+![Course](https://img.shields.io/badge/CSC8851-Spring%202026-6A5ACD)
 
-Hey! This README walks through everything I built for the final project — from data exploration all the way to a live demo app. If you just want to **run the app** without re-training anything, jump straight to [Quick Start](#quick-start-run-the-app-without-retraining).
+> Team: Bryan Chau, Katelyn Truong, Loc Giang  
+> Course: CSC8851 Deep Learning  
+> Semester: Spring 2026
 
----
+This repository contains our end-to-end system for estimating nutrition from one food image.
+At the current stage, the app supports the full multi-phase pipeline (Phase 3 + 4 + 5 + 6), with fallback logic when some checkpoints are missing.
 
-## What This Project Does
-
-We built a system that takes a **photo of a food dish** and predicts:
-- 🔥 Calories (kcal)
-- 🥑 Fat (g)
-- 🍗 Protein (g)
-- 🍞 Carbohydrates (g)
-
-The final pipeline stacks four models together:
-
-```
-Input photo
-    │
-    ├─► YOLOv8-seg          → segments the food region (mask)
-    ├─► EfficientNet-B0     → identifies what food it is (Phase 5, optional)
-    ├─► MiDaS_small         → estimates depth (how much food is on the plate)
-    └─► NutritionMLP        → predicts calories/fat/protein/carbs
-              + MC Dropout  → gives uncertainty estimate (±)
-```
+If you just want to run the demo locally, go to [Quick Start](#quick-start-run-the-app-current-setup).
 
 ---
 
-## Project Phases Overview
+## 🚀 Current Project Stage
 
-| Phase | Notebook | What I did |
+The app is no longer Phase-4-only. It now supports these runtime modes:
+
+- `full`: Phase 6 (weight-first) + Phase 4 (direct regression) + Phase 5 (food classifier), with Phase 3 loaded for baseline comparison
+- `phase6`: weight-first path only
+- `phase4`: direct regression path only
+- `phase3`: ResNet-50 fallback baseline
+
+| Mode | Status | Description |
 |---|---|---|
-| **1** | `01_data_exploration.ipynb` | Explored Nutrition5K — checked class distributions, plotted calorie histograms, found the dataset covers ~5K overhead dish photos |
-| **2** | `02_dataset_and_dataloader.ipynb` | Built a custom PyTorch `Dataset` + `DataLoader` for Nutrition5K with train/val/test splits |
-| **3** | `03_model.ipynb` | Fine-tuned **ResNet-50** end-to-end for nutrition regression — this is the baseline |
-| **4** | `04_yolo_depth_pipeline.ipynb` | Built the full pipeline: YOLOv8-seg → MiDaS depth → 9-feature MLP with MC Dropout uncertainty |
-| **5** | `05_food_classifier.ipynb` | Fine-tuned **EfficientNet-B0** on Food-101 (101 food categories) so the app can actually name what food it sees |
+| `full` | 🟢 Best | Ensemble + classifier + priors |
+| `phase6` | 🟡 Good | Weight-first with density constants |
+| `phase4` | 🟡 Good | Direct nutrition regression |
+| `phase3` | 🔵 Baseline | ResNet fallback |
 
-Phases 3–5 were trained on **Kaggle** (T4 GPU). Phases 1–2 can run locally.
+In `full` mode, the app combines:
+
+1. YOLOv8 segmentation + MiDaS depth -> 9 geometric features
+2. WeightMLP (Phase 6) with MC Dropout
+3. NutritionMLP (Phase 4) with MC Dropout
+4. EfficientNet-B0 food classification (Phase 5, optional but recommended)
+5. USDA/restaurant serving priors for food-aware scaling and ingredient edits
 
 ---
 
-## Project Structure
+## 🗂️ Project Layout
 
 ```
 csc8851_spring26_finalProject/
-│
-├── app/
-│   └── app.py                  ← Gradio demo (the thing you run!)
-│
-├── notebooks/
-│   ├── 01_data_exploration.ipynb
-│   ├── 02_dataset_and_dataloader.ipynb
-│   ├── 03_model.ipynb           ← ResNet-50 baseline (Phase 3)
-│   ├── 04_yolo_depth_pipeline.ipynb  ← Main pipeline (Phase 4)
-│   └── 05_food_classifier.ipynb      ← Food type detection (Phase 5)
-│
-├── models/                      ← Put downloaded checkpoints here!
-│   ├── best_mlp.pt              ← Phase 4 MLP weights (from Kaggle)
-│   ├── best_model.pt            ← Phase 3 ResNet-50 weights (from Kaggle)
-│   ├── mlp_feat_stats.npz       ← Feature normalisation stats (from Kaggle)
-│   ├── best_food_classifier.pt  ← Phase 5 EfficientNet weights (optional)
-│   └── food101_labels.json      ← Food-101 class names (optional)
-│
-├── data/                        ← Nutrition5K dataset goes here (local only)
-├── src/                         ← Helper utilities
-└── yolov8n-seg.pt               ← YOLOv8n-seg weights (auto-downloaded by ultralytics)
+|
+|- app/
+|  |- app.py
+|  |- core_models.py
+|  |- pipeline.py
+|  |- ui.py
+|  `- usda.py
+|
+|- notebooks/
+|  |- 01_data_exploration.ipynb
+|  |- 02_dataset_and_dataloader.ipynb
+|  |- 03_model.ipynb
+|  |- 04_yolo_depth_pipeline.ipynb
+|  |- 05_food_classifier.ipynb
+|  |- 06_weight_prediction.ipynb
+|  `- 07_kaggle_train_ingredient_yolov8_seg.ipynb
+|
+|- models/   (all checkpoints and metadata go here)
+|- report/
+|- data/
+`- yolov8n-seg.pt
 ```
 
 ---
 
-## Quick Start — Run the App Without Retraining
+## ⚡ Quick Start (Run the App, Current Setup)
 
-### Step 1: Clone & set up environment
+### 1) Environment
 
 ```bash
 git clone https://github.com/bryanchau11/csc8851_spring26_finalProject.git
 cd csc8851_spring26_finalProject
 
 python3 -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 ```
 
-### Step 2: Install dependencies
+### 2) Install packages
 
 ```bash
+pip install --upgrade pip
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-pip install ultralytics timm pillow opencv-python
+pip install ultralytics timm opencv-python pillow
 pip install gradio==3.50.2 gradio_client==0.6.1 huggingface_hub==0.20.3
+pip install numpy
 ```
 
-> **Note for Mac M1/M2/M3**: The `torch` install above works fine. MPS acceleration is enabled automatically.  
-> **Note for GPU machines**: Replace the torch install URL with the appropriate CUDA version from [pytorch.org](https://pytorch.org/get-started/locally/).
+> [!TIP]
+> On Apple Silicon (M1/M2/M3), PyTorch will use MPS when available.
 
-### Step 3: Download the model checkpoints from Kaggle
+> [!NOTE]
+> On CUDA machines, install the CUDA build of PyTorch from pytorch.org.
 
-You need these files from the Kaggle notebook outputs:
+### 3) Put checkpoints in `models/`
 
-| File | From which Kaggle notebook | Required? |
+The app will auto-detect what it can load.
+
+| File | Used by | Required for mode |
 |---|---|---|
-| `best_mlp.pt` | `04_yolo_depth_pipeline` output | **Yes** |
-| `mlp_feat_stats.npz` | `04_yolo_depth_pipeline` output | **Yes** |
-| `best_model.pt` | `03_model` output | Optional (Phase 3 fallback) |
-| `best_food_classifier.pt` | `05_food_classifier` output | Optional (food naming) |
-| `food101_labels.json` | `05_food_classifier` output | Optional (food naming) |
+| `best_weight_mlp.pt` | Phase 6 WeightMLP | `full` / `phase6` |
+| `nutrition_constants.json` | Phase 6 nutrient conversion | `full` / `phase6` |
+| `weight_feat_stats.npz` | Phase 6 feature normalization | `full` / `phase6` |
+| `best_mlp.pt` | Phase 4 NutritionMLP | `full` / `phase4` |
+| `mlp_feat_stats.npz` | Phase 4 feature normalization | `full` / `phase4` |
+| `best_model.pt` | Phase 3 ResNet baseline | optional fallback/comparison |
+| `best_food_classifier.pt` | Phase 5 dish classifier | optional (food naming + priors) |
+| `food101_labels.json` | Phase 5 class names | optional fallback labels |
+| `best_ingredient_yolov8_seg.pt` | ingredient/component segmentation | optional |
+| `ingredient_labels.json` | ingredient label map | optional |
 
-Place all downloaded files inside the `models/` folder. The minimum to run Phase 4 is:
-```
+Minimum recommended to run the current best path:
+
+```text
+models/best_weight_mlp.pt
+models/nutrition_constants.json
+models/weight_feat_stats.npz
 models/best_mlp.pt
 models/mlp_feat_stats.npz
 ```
 
-### Step 4: Run the app
+### 4) (Optional) USDA API key
+
+The app works without this, but you can improve lookup quality and reduce misses:
 
 ```bash
-source .venv/bin/activate    # if not already active
+export USDA_API_KEY=your_key_here
+```
+
+If not set, the code uses `DEMO_KEY` with cache/fallback logic.
+
+> [!TIP]
+> For repeated testing, keeping `models/usda_cache.json` helps reduce API calls and speeds up future runs.
+
+### 5) Launch
+
+```bash
 python app/app.py
 ```
 
-You'll see something like:
-```
-✓ YOLO food classes: ['apple', 'banana', 'bowl', ...]
-✓ Phase 4 pipeline loaded  (targets: ['calories', 'fat', 'protein', 'carbs'])
-✓ Phase 5 food classifier loaded  (101 classes)
-Running on local URL:  http://127.0.0.1:7860
-Running on public URL: https://xxxx.gradio.live
-```
-
-Open `http://127.0.0.1:7860` in your browser, upload any food photo, click **Predict**.
+Open `http://127.0.0.1:7860` and test with a meal image.
 
 ---
 
-## What the App Shows
+## 👀 What You Should See in the App
 
-- **Calorie / macro prediction** with uncertainty (e.g. `calories: 412.3 ± 48.2`)
-- **Food type label** if Phase 5 classifier is loaded (e.g. `🍕 Detected food: Pizza (87% confidence)`)
-- **Top-3 food alternatives** in the ingredient table
-- Which pipeline is active (Phase 4 preferred, falls back to Phase 3 ResNet if MLP not found)
-
----
-
-## How to Retrain (if you want to)
-
-All notebooks are designed to run on **Kaggle** (free T4 GPU). Upload the notebook, connect the Nutrition5K dataset, and run all cells. Each notebook has a **checkpoint-skip guard** — if the output file already exists it won't re-train from scratch.
-
-### Kaggle dataset needed
-- **Nutrition5K** — search "Nutrition5K" in Kaggle datasets, or use the official one from Google Research.
-- **Food-101** — `torchvision.datasets.Food101` auto-downloads it (Phase 5 only, ~5 GB).
-
-### Recommended training order
-```
-03_model.ipynb          → ~1-2 hours on T4
-04_yolo_depth_pipeline.ipynb  → ~30 min on T4 (features are cached)
-05_food_classifier.ipynb      → ~3-4 hours on T4 (20 epochs, Food-101)
-```
+- Active pipeline badge (`full`, `phase6`, `phase4`, or `phase3`)
+- Calories + macros with uncertainty
+- Dish label when the classifier is available/confident
+- Ingredient table (with editable portions/units)
+- Weight prediction details accordion
+- GPU/compute stats accordion
 
 ---
 
-## Model Details
+## 📓 Notebook Phases (Current)
 
-### Phase 4 — NutritionMLP
+| Phase | Notebook | Purpose |
+|---|---|---|
+| 1 | `01_data_exploration.ipynb` | Nutrition5K exploration |
+| 2 | `02_dataset_and_dataloader.ipynb` | Dataset/DataLoader prep |
+| 3 | `03_model.ipynb` | ResNet-50 nutrition baseline |
+| 4 | `04_yolo_depth_pipeline.ipynb` | YOLO + MiDaS + NutritionMLP |
+| 5 | `05_food_classifier.ipynb` | Food-101 EfficientNet-B0 classifier |
+| 6 | `06_weight_prediction.ipynb` | Weight-first model + constants |
+| 7 | `07_kaggle_train_ingredient_yolov8_seg.ipynb` | Ingredient/component segmentation |
 
-```
-Input: 9 features
-  - mask_area (fraction of image covered by food)
-  - depth mean/std/median/max (full image)
-  - masked depth mean/std/median/max (food region only)
+Suggested Kaggle training order for current app behavior:
 
-Architecture: Linear(9→128) → BN → ReLU → Dropout(0.2)
-              Linear(128→64) → BN → ReLU → Dropout(0.2)
-              Linear(64→32)  → BN → ReLU → Dropout(0.2)
-              Linear(32→4)   → [calories, fat, protein, carbs]
-
-Uncertainty: MC Dropout (30 forward passes, fixed seed=42)
-             Reports mean ± 2σ
-```
-
-### Phase 5 — FoodClassifier
-
-```
-Backbone: EfficientNet-B0 (pretrained ImageNet, all layers fine-tuned)
-Head: Dropout(0.3) → Linear(1280→512) → BN → ReLU → Dropout(0.15) → Linear(512→101)
-Dataset: Food-101 (75,750 train / 25,250 test images, 101 classes)
-Expected accuracy: ~83-87% top-1, ~96% top-5
-Training: AdamW, differential LR (backbone 5e-5, head 3e-4), Cosine LR, Mixup α=0.4
-```
+1. `03_model.ipynb`
+2. `04_yolo_depth_pipeline.ipynb`
+3. `05_food_classifier.ipynb`
+4. `06_weight_prediction.ipynb`
+5. `07_kaggle_train_ingredient_yolov8_seg.ipynb` (optional)
 
 ---
 
-## Known Limitations
+## 🧩 Dependencies Used by the App
 
-1. **Calories are geometry-based, not food-type-based** — the MLP uses depth + mask area, so it can't tell pizza from salad. The Phase 5 classifier adds the food label but doesn't yet feed back into the calorie prediction.
-
-2. **Nutrition5K is a lab dataset** — all images are Google cafeteria dishes photographed overhead in controlled lighting. Real-world photos (restaurant, home) will be less accurate.
-
-3. **Food-101 has 101 categories** — common foods are well covered (pizza, ramen, sushi, burgers, salads, tacos, etc.) but regional/ethnic foods may not be recognised. See below for dataset upgrades.
-
----
-
-## Upgrading Food Recognition (Future Work)
-
-If you want to train on more food categories for better real-world coverage:
-
-| Dataset | Classes | Best for | Link |
-|---|---|---|---|
-| Food-101 *(current)* | 101 | Common Western foods | `torchvision.datasets.Food101` |
-| iFood-2019 | 251 | Fine-grained categories | Kaggle: `horizonhardik/ifood-2019-fgvc6` |
-| UECFOOD-256 | 256 | Japanese & Asian cuisine | http://foodcam.mobi/dataset256.html |
-| Food2K | 2,000 | Maximum variety | Needs a big GPU |
-
-To switch datasets: update `CFG['num_classes']` in `05_food_classifier.ipynb` and re-run.
-
----
-
-## Dependencies
-
-```
-torch>=2.0
-torchvision>=0.15
-ultralytics          # YOLOv8
-timm                 # EfficientNet-B0
+```text
+torch
+torchvision
+ultralytics
+timm
 opencv-python
 pillow
 gradio==3.50.2
 gradio_client==0.6.1
 huggingface_hub==0.20.3
-scikit-learn         # top_k_accuracy_score (training only)
 numpy
-matplotlib
 ```
+
+Training notebooks may additionally use common analysis packages (for example matplotlib/scikit-learn/pandas).
 
 ---
 
-## Quick Troubleshooting
+## 🛠️ Quick Troubleshooting
 
 | Problem | Fix |
 |---|---|
 | `ModuleNotFoundError: timm` | `pip install timm` |
 | `ModuleNotFoundError: cv2` | `pip install opencv-python` |
-| `UnpicklingError` when loading `.pt` | Already handled — we use `weights_only=False` in all `torch.load()` calls |
-| App says "No model checkpoint found" | Make sure `best_mlp.pt` and `mlp_feat_stats.npz` are in `models/` |
-| Food classifier shows "Unknown dish" | Either `best_food_classifier.pt` is missing or the food is not in Food-101's 101 classes |
-| Gradio version conflicts | Stick to the exact versions: `gradio==3.50.2 gradio_client==0.6.1 huggingface_hub==0.20.3` |
+| `No model checkpoint found` at startup | Add at least one valid checkpoint set in `models/` (Phase 6 or Phase 4 or Phase 3) |
+| Food label missing | `best_food_classifier.pt` is missing, failed to load, or confidence is too low |
+| USDA lookup weak/missing | set `USDA_API_KEY`, then retry (cache is stored in `models/usda_cache.json`) |
+| Gradio/version conflicts | keep `gradio==3.50.2`, `gradio_client==0.6.1`, `huggingface_hub==0.20.3` |
+
+> [!WARNING]
+> If the app starts but predictions look flat/off, the most common cause is a stats mismatch (`mlp_feat_stats.npz` or `weight_feat_stats.npz` from a different training run).
 
 ---
 
-*Built for CSC8851 Spring 2026 — thanks for checking it out!* 🙂
+## ⚠️ Notes and Limitations
+
+- Nutrition5K images are controlled overhead captures, so real-world photos can still cause domain shift.
+- MiDaS depth is relative, not metric depth; Phase 6 handles this with serving anchors and conservative scaling.
+- Food-101 has 101 classes, so long-tail regional foods can still be mislabeled.
+
+---
+
+Built for CSC8851 Spring 2026 🍜
